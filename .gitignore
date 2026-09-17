@@ -1,0 +1,17 @@
+node_modules
+dist
+dist-ssr
+screenshots/
+test-results/
+playwright-report/
+blob-report/
+*.local
+*.log
+.vite
+*.tsbuildinfo
+
+# Claude Code session state, not part of the project
+.claude/
+
+# Superseded by docs/ once extracted; kept locally, not tracked
+tunnel-vision-handoff.zip
