@@ -1,10 +1,12 @@
-// Composes the world (sky, soil, surface, ants, brood) and fits it to the
-// viewport. M1 uses a fixed static framing; the real spring-damped
-// auto-framing camera (drag, zoom, easing) arrives in M4.
-import { Application, Container } from 'pixi.js';
-import { layout, world } from '../config';
-import { createAnts, type AntSpec } from './ants';
-import { createBroodCluster } from './brood';
+// Composes the world (sky, soil, surface, mound, the digger) and fits it to
+// the viewport. M1's fixed static framing is still a stand-in for the real
+// spring-damped auto-framing camera, which arrives in M4.
+import { Application, Container, Sprite } from 'pixi.js';
+import { layout, world as worldConfig } from '../config';
+import type { Simulation } from '../sim/sim';
+import type { DirtyRect, World } from '../sim/world';
+import { createDiggerSprite } from './ants';
+import { createMoundRenderer } from './mound';
 import { createOverlay } from './overlay';
 import { createSky, type Sky } from './sky';
 import { createSoil } from './soil';
@@ -12,38 +14,57 @@ import { createSurface, type Surface } from './surface';
 
 export interface Scene {
   resize(width: number, height: number): void;
-  update(deltaSeconds: number): void;
+  /** Cosmetic, real-time motion (sky, grass sway) — independent of the sim's
+   * fixed timestep and dev time scale (CLAUDE.md "Two clocks"). */
+  updateEnvironment(deltaSeconds: number): void;
+  /** Repaints whatever the sim touched since the last render frame. */
+  syncFromSim(sim: Simulation, dirty: DirtyRect | null): void;
+  /** Draws the digger at its interpolated pose between sim ticks. */
+  renderInterpolated(sim: Simulation, alpha: number): void;
+  /** Dev-mode density overlay (SPEC section 11): shows the raw tunnel mask
+   * (white = open) directly, before the shader's soft edges and colors. */
+  setDensityOverlayVisible(visible: boolean): void;
   sky: Sky;
 }
 
-const WORLD_WIDTH = world.gridW * world.cellSize;
+const WORLD_WIDTH = worldConfig.gridW * worldConfig.cellSize;
 
-// Hand-placed to sit inside the hand-authored tunnel mask (tunnelMask.ts):
-// chamber A (nursery) at texel (168, 36), chamber B (royal) at (240, 98),
-// the entrance at (200, 0), and a point partway down the main shaft.
-const ANTS: AntSpec[] = [
-  { x: 960, y: 392, rotation: 0, queen: true },
-  { x: 645, y: 148, rotation: 0 },
-  { x: 840, y: 568, rotation: Math.PI / 2 },
-  { x: 836, y: -4, rotation: 0, carryingPellet: true },
-];
-const BROOD_POSITION = { x: 672, y: 144 };
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
 
-export function createScene(app: Application, seed: string): Scene {
+function lerpAngle(a: number, b: number, t: number): number {
+  let diff = (b - a) % (Math.PI * 2);
+  if (diff > Math.PI) diff -= Math.PI * 2;
+  if (diff < -Math.PI) diff += Math.PI * 2;
+  return a + diff * t;
+}
+
+export function createScene(app: Application, seed: string, world: World): Scene {
   const worldContainer = new Container();
   app.stage.addChild(worldContainer);
 
   const sky = createSky(seed);
   worldContainer.addChild(sky.container);
 
-  const soil = createSoil(seed);
+  const soil = createSoil(seed, world);
   worldContainer.addChild(soil.container);
 
   const surface: Surface = createSurface(seed);
   worldContainer.addChild(surface.container);
 
-  worldContainer.addChild(createBroodCluster(seed, BROOD_POSITION.x, BROOD_POSITION.y));
-  worldContainer.addChild(createAnts(ANTS));
+  const moundRenderer = createMoundRenderer();
+  worldContainer.addChild(moundRenderer.container);
+
+  const digger = createDiggerSprite();
+  worldContainer.addChild(digger.container);
+
+  const densityOverlay = new Sprite(soil.mask.texture);
+  densityOverlay.width = WORLD_WIDTH;
+  densityOverlay.height = worldConfig.gridH * worldConfig.cellSize;
+  densityOverlay.alpha = 0.6;
+  densityOverlay.visible = false;
+  worldContainer.addChild(densityOverlay);
 
   const overlay = createOverlay();
   app.stage.addChild(overlay.container, overlay.vignette);
@@ -64,9 +85,26 @@ export function createScene(app: Application, seed: string): Scene {
 
   return {
     resize,
-    update(deltaSeconds: number): void {
+    updateEnvironment(deltaSeconds: number): void {
       sky.update(deltaSeconds);
       surface.update(deltaSeconds);
+    },
+    syncFromSim(sim: Simulation, dirty: DirtyRect | null): void {
+      soil.mask.sync(dirty);
+      moundRenderer.sync(sim.mound);
+    },
+    renderInterpolated(sim: Simulation, alpha: number): void {
+      const prev = sim.previousDiggerPose;
+      const cur = sim.digger;
+      digger.setPose(
+        lerp(prev.x, cur.x, alpha),
+        lerp(prev.y, cur.y, alpha),
+        lerpAngle(prev.heading, cur.heading, alpha),
+        cur.phase === 'goingUp',
+      );
+    },
+    setDensityOverlayVisible(visible: boolean): void {
+      densityOverlay.visible = visible;
     },
     sky,
   };

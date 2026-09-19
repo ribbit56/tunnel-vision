@@ -37,3 +37,20 @@ for (const viewport of VIEWPORTS) {
     });
   }
 }
+
+// M2 gallery (MILESTONES.md): the single digger's tunnel after a while at
+// 300x dev time scale, for a couple of seeds, to check the growth reads as
+// organic (no grid artifacts) and bends differently per seed.
+const M2_SEEDS = ['acorn', 'birch'];
+
+for (const seed of M2_SEEDS) {
+  test(`m2 gallery digger ${seed}`, async ({ page }) => {
+    test.setTimeout(120000);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`/?seed=${seed}&dev=1`);
+    await page.waitForSelector('#app canvas');
+    await page.getByRole('button', { name: '300x' }).click();
+    await page.waitForTimeout(60000);
+    await page.screenshot({ path: `screenshots/m2-digger-${seed}.png` });
+  });
+}

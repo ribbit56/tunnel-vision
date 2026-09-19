@@ -1,6 +1,8 @@
 // Surface dressing: grass tufts (swaying), a few flowers, one small plant,
-// the entrance opening with its crater rim, and the mound beside it (SPEC
-// section 7 "Surface"). All positioned in world space around y = 0.
+// and the entrance opening with its crater rim (SPEC section 7 "Surface").
+// All positioned in world space around y = 0. The mound itself is real
+// simulation output now (sim/surface/mound.ts) and rendered separately in
+// render/mound.ts, since it grows from what the digger actually carries up.
 import { Container, Graphics } from 'pixi.js';
 import { grass as grassConfig, surfaceFeatures } from '../config';
 import { createStream } from '../sim/rng';
@@ -64,20 +66,6 @@ function buildFlower(rng: () => number): Graphics {
   return gfx;
 }
 
-function buildMound(): Graphics {
-  const gfx = new Graphics();
-  const w = surfaceFeatures.moundWidth;
-  const h = surfaceFeatures.moundHeight;
-  gfx.ellipse(0, 0, w / 2, h).fill({ color: parseInt(surfacePalette.moundSettled.slice(1), 16) });
-  gfx
-    .ellipse(-w * 0.12, -h * 0.35, w * 0.22, h * 0.4)
-    .fill({ color: parseInt(surfacePalette.moundFreshPellet.slice(1), 16), alpha: 0.8 });
-  gfx
-    .ellipse(w * 0.18, -h * 0.15, w * 0.18, h * 0.3)
-    .fill({ color: parseInt(surfacePalette.moundFreshPellet.slice(1), 16), alpha: 0.6 });
-  return gfx;
-}
-
 function buildEntrance(): Graphics {
   const gfx = new Graphics();
   const r = surfaceFeatures.entranceRadius;
@@ -93,11 +81,6 @@ export function createSurface(seed: string): Surface {
   const rng = createStream(seed, 'render:surface');
   const container = new Container();
 
-  const mound = buildMound();
-  mound.x = surfaceFeatures.entranceX + surfaceFeatures.moundWidth * 0.55;
-  mound.y = 0;
-  container.addChild(mound);
-
   const entrance = buildEntrance();
   entrance.x = surfaceFeatures.entranceX;
   container.addChild(entrance);
@@ -106,7 +89,7 @@ export function createSurface(seed: string): Surface {
   for (let i = 0; i < grassConfig.tuftCount; i++) {
     const x = rng() * WORLD_WIDTH;
     // Keep the grass from growing directly out of the entrance/mound.
-    if (Math.abs(x - surfaceFeatures.entranceX) < surfaceFeatures.moundWidth * 0.7) continue;
+    if (Math.abs(x - surfaceFeatures.entranceX) < surfaceFeatures.entranceKeepout) continue;
     const tuft = buildTuft(rng);
     tuft.x = x;
     tuft.y = 0;
@@ -116,7 +99,7 @@ export function createSurface(seed: string): Surface {
 
   for (let i = 0; i < grassConfig.flowerCount; i++) {
     const x = rng() * WORLD_WIDTH;
-    if (Math.abs(x - surfaceFeatures.entranceX) < surfaceFeatures.moundWidth * 0.7) continue;
+    if (Math.abs(x - surfaceFeatures.entranceX) < surfaceFeatures.entranceKeepout) continue;
     const flower = buildFlower(rng);
     flower.x = x;
     container.addChild(flower);

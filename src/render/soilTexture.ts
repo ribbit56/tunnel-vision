@@ -3,20 +3,12 @@
 // once per seed; moisture darkening and depth dimming beyond the static bake
 // below are applied live in the tunnel shader, not here.
 import { Texture } from 'pixi.js';
-import { generateStrata, STRATA_BANDS, type StrataField } from '../sim/strata';
+import { interpBoundary, STRATA_BANDS, type StrataField } from '../sim/strata';
 import { hexToRgb, type Rgb } from '../theme/colorMath';
 import { strata as strataPalette } from '../theme/palette';
 
 function clamp8(v: number): number {
   return Math.max(0, Math.min(255, Math.round(v)));
-}
-
-function interpBoundary(row: number[], columnWidth: number, x: number): number {
-  const colF = x / columnWidth;
-  const i0 = Math.max(0, Math.min(Math.floor(colF), row.length - 1));
-  const i1 = Math.min(i0 + 1, row.length - 1);
-  const t = colF - i0;
-  return row[i0] + (row[i1] - row[i0]) * t;
 }
 
 function drawBlob(
@@ -39,14 +31,16 @@ function drawBlob(
   }
 }
 
-export interface SoilTexture {
-  texture: Texture;
-  field: StrataField;
-}
-
-export function buildSoilTexture(seed: string, worldWidth: number, worldDepth: number): SoilTexture {
-  const field = generateStrata(seed, worldWidth, worldDepth);
-
+/**
+ * Bakes a strata field (from `sim/world.ts`, so the picture matches exactly
+ * what the sim is digging into) into a color texture.
+ */
+export function buildSoilTexture(
+  seed: string,
+  field: StrataField,
+  worldWidth: number,
+  worldDepth: number,
+): Texture {
   const canvas = document.createElement('canvas');
   canvas.width = worldWidth;
   canvas.height = worldDepth;
@@ -111,5 +105,5 @@ export function buildSoilTexture(seed: string, worldWidth: number, worldDepth: n
   }
   ctx.globalAlpha = 1;
 
-  return { texture: Texture.from(canvas), field };
+  return Texture.from(canvas);
 }

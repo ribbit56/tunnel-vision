@@ -1,21 +1,12 @@
-// Static ants for M1's art-direction lock (SPEC "Ants and brood"): three soft
-// ellipses, thin legs and antennae as rounded-cap lines, a faint highlight on
-// the abdomen. Real movement and behavior arrive in M3/M5 — this is only
-// ever a still picture, positioned by hand to match the hand-authored tunnel
-// mask in tunnelMask.ts.
+// Ant rendering (SPEC "Ants and brood"): three soft ellipses, thin legs and
+// antennae as rounded-cap lines, a faint highlight on the abdomen. M2 only
+// ever shows the one live digger; the queen, brood, and the rest of the cast
+// return in M5 once the colony has a lifecycle to draw.
 import { Container, Graphics } from 'pixi.js';
 import { creatures } from '../theme/palette';
 
 function hex(c: string): number {
   return parseInt(c.replace('#', ''), 16);
-}
-
-export interface AntSpec {
-  x: number;
-  y: number;
-  rotation: number;
-  queen?: boolean;
-  carryingPellet?: boolean;
 }
 
 function buildAntBody(length: number, bodyColor: number, highlightColor: number): Graphics {
@@ -64,30 +55,33 @@ function buildPellet(): Graphics {
   return gfx;
 }
 
-export function buildAnt(spec: AntSpec): Container {
-  const container = new Container();
-  const length = spec.queen ? 15 : 9;
-  const bodyColor = hex(spec.queen ? creatures.queenBody : creatures.workerBody);
-  const highlight = hex(spec.queen ? creatures.queenAbdomenBand : creatures.workerHighlight);
+const WORKER_LENGTH = 9;
 
-  container.addChild(buildAntBody(length, bodyColor, highlight));
-
-  if (spec.carryingPellet) {
-    const pellet = buildPellet();
-    pellet.x = -length * 0.75;
-    container.addChild(pellet);
-  }
-
-  container.x = spec.x;
-  container.y = spec.y;
-  container.rotation = spec.rotation;
-  return container;
+export interface DiggerSprite {
+  container: Container;
+  setPose(x: number, y: number, rotation: number, carryingPellet: boolean): void;
 }
 
-export function createAnts(specs: AntSpec[]): Container {
+/** A single worker ant whose position/rotation/pellet are updated every
+ * frame from the live sim state, rather than a fixed decorative pose. */
+export function createDiggerSprite(): DiggerSprite {
   const container = new Container();
-  for (const spec of specs) {
-    container.addChild(buildAnt(spec));
-  }
-  return container;
+  container.addChild(
+    buildAntBody(WORKER_LENGTH, hex(creatures.workerBody), hex(creatures.workerHighlight)),
+  );
+
+  const pellet = buildPellet();
+  pellet.x = -WORKER_LENGTH * 0.75;
+  pellet.visible = false;
+  container.addChild(pellet);
+
+  return {
+    container,
+    setPose(x: number, y: number, rotation: number, carryingPellet: boolean): void {
+      container.x = x;
+      container.y = y;
+      container.rotation = rotation;
+      pellet.visible = carryingPellet;
+    },
+  };
 }

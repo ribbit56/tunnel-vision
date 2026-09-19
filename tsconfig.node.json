@@ -20,6 +20,7 @@
     "playwright.shots.config.ts",
     "tests/**/*.ts",
     "e2e/**/*.ts",
-    "src/sim/**/*.ts"
+    "src/sim/**/*.ts",
+    "src/config.ts"
   ]
 }

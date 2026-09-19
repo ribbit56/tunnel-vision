@@ -46,6 +46,18 @@ const BASE_THICKNESS: Record<Exclude<StrataMaterial, 'deep'>, { min: number; max
   subsoil: { min: 0.14, max: 0.22 },
 };
 
+/** Interpolates a boundary row (sampled at `columns` evenly spaced points
+ * across the world width) at an arbitrary world x. Shared by the soil
+ * texture (render) and the terrain grid (sim) so both agree on exactly
+ * where each band sits. */
+export function interpBoundary(row: number[], columnWidth: number, x: number): number {
+  const colF = x / columnWidth;
+  const i0 = Math.max(0, Math.min(Math.floor(colF), row.length - 1));
+  const i1 = Math.min(i0 + 1, row.length - 1);
+  const t = colF - i0;
+  return row[i0] + (row[i1] - row[i0]) * t;
+}
+
 export function generateStrata(
   seed: string,
   worldWidth: number,

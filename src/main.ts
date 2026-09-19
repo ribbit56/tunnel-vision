@@ -1,15 +1,23 @@
 import { Application } from 'pixi.js';
+import { createMainLoop } from './app/mainLoop';
 import { readSession } from './app/session';
 import { layout } from './config';
 import { mountDevPanel } from './dev/devPanel';
 import { createScene } from './render/scene';
+import { createSimulation, stepSimulation } from './sim/sim';
+import { mergeDirty, type DirtyRect } from './sim/world';
 import './theme/typography';
 import { mountControls } from './ui/controls';
 import './ui/styles.css';
 import { mountTimer } from './ui/timer';
 
+// Sim runs at a fixed 30 Hz; rendering interpolates between ticks (SPEC
+// section 10, CLAUDE.md "Fixed timestep simulation").
+const FIXED_DT = 1 / 30;
+
 async function main(): Promise<void> {
   const session = readSession();
+  const sim = createSimulation(session.seed);
 
   const app = new Application();
   // The tunnel filter only ships a WebGL program (SPEC's rendering technique
@@ -23,13 +31,24 @@ async function main(): Promise<void> {
   }
   container.appendChild(app.canvas);
 
-  const scene = createScene(app, session.seed);
+  const scene = createScene(app, session.seed, sim.world);
   window.addEventListener('resize', () => {
     scene.resize(window.innerWidth, window.innerHeight);
   });
 
-  app.ticker.add((ticker) => {
-    scene.update(ticker.deltaMS / 1000);
+  // Sim steps accumulate a dirty rect each tick; a render frame that ran
+  // several ticks (high dev time scale) repaints once with their union.
+  let pendingDirty: DirtyRect | null = null;
+  const mainLoop = createMainLoop(FIXED_DT, {
+    step: (dt) => {
+      const result = stepSimulation(sim, dt);
+      pendingDirty = mergeDirty(pendingDirty, result.dirty);
+    },
+    render: (alpha) => {
+      scene.syncFromSim(sim, pendingDirty);
+      pendingDirty = null;
+      scene.renderInterpolated(sim, alpha);
+    },
   });
 
   // Shared with #timer-wrap's CSS height so the UI and the render camera
@@ -42,8 +61,14 @@ async function main(): Promise<void> {
   mountTimer(hud);
   mountControls(hud);
 
+  app.ticker.add((ticker) => {
+    const deltaSeconds = ticker.deltaMS / 1000;
+    mainLoop.frame(deltaSeconds);
+    scene.updateEnvironment(deltaSeconds);
+  });
+
   if (session.devMode) {
-    mountDevPanel(session.seed, scene);
+    mountDevPanel(session.seed, scene, mainLoop, sim);
   }
 }
 
