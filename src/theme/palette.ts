@@ -1,5 +1,6 @@
 // All colors live here (CLAUDE.md "Visual rules"). Nothing outside this file
 // should hard-code a hex value. Values transcribed from docs/SPEC.md section 7.
+import { lerp, lerpColor } from './colorMath';
 
 export interface TimeOfDayKeyframe {
   /** Hour of day this keyframe represents (24h clock), for reference only. */
@@ -70,6 +71,50 @@ export const ui = {
   honeyAccent: '#E3A857',
   panelBackground: 'rgba(59, 42, 32, 0.55)',
 };
+
+export interface SkyColors {
+  skyTop: number;
+  skyHorizon: number;
+  lightTint: number;
+  exposure: number;
+}
+
+const keyframesByClock = [timeOfDay.night, timeOfDay.dawn, timeOfDay.day, timeOfDay.dusk].map(
+  (k) => k,
+);
+
+/**
+ * Blends the four time-of-day keyframes for a given hour (0-24, cyclic), so
+ * the sky and scene light change smoothly rather than snapping between
+ * states (CLAUDE.md "Nothing flickers, jitters, or snaps").
+ */
+export function sampleTimeOfDay(hours: number): SkyColors {
+  const h = ((hours % 24) + 24) % 24;
+
+  // Keyframes sorted by clock, with night's 0 also placed at 24 so the last
+  // segment (dusk -> night) interpolates correctly across midnight.
+  const points = [...keyframesByClock, { ...timeOfDay.night, clock: 24 }];
+
+  let a = points[0];
+  let b = points[points.length - 1];
+  for (let i = 0; i < points.length - 1; i++) {
+    if (h >= points[i].clock && h <= points[i + 1].clock) {
+      a = points[i];
+      b = points[i + 1];
+      break;
+    }
+  }
+
+  const span = b.clock - a.clock;
+  const t = span === 0 ? 0 : (h - a.clock) / span;
+
+  return {
+    skyTop: lerpColor(a.skyTop, b.skyTop, t),
+    skyHorizon: lerpColor(a.skyHorizon, b.skyHorizon, t),
+    lightTint: lerpColor(a.lightTint, b.lightTint, t),
+    exposure: lerp(a.exposure, b.exposure, t),
+  };
+}
 
 /** Depth dimming applied to soil regardless of time of day (SPEC section 7). */
 export const soilDepthDimming = {

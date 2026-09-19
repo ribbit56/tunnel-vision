@@ -10,8 +10,9 @@ blob-report/
 .vite
 *.tsbuildinfo
 
-# Claude Code session state, not part of the project
-.claude/
+# Claude Code local/session state; launch.json (dev server config for the
+# in-app browser preview) is genuinely project config and stays tracked.
+.claude/settings.local.json
 
 # Superseded by docs/ once extracted; kept locally, not tracked
 tunnel-vision-handoff.zip
