@@ -1,9 +1,9 @@
 // Sky: gradient, sun/moon arcs, stars, and a couple of soft clouds. Time of
-// day is driven by a single "hour" value (0-24). For M1 this is only ever set
-// by the dev slider; SPEC section 6 makes it a pure function of real time
-// once the environment system lands in M7.
+// day is driven by a single "hour" value (0-24), computed from real time by
+// `environment/dayNight.ts` (SPEC section 6) and passed in via `setHour`.
 import { BlurFilter, Container, FillGradient, Graphics } from 'pixi.js';
 import { sky as skyConfig, world } from '../config';
+import { nightFactorForHour } from '../environment/dayNight';
 import { createStream } from '../sim/rng';
 import { creatures, sampleTimeOfDay } from '../theme/palette';
 
@@ -11,6 +11,9 @@ export interface Sky {
   container: Container;
   setHour(hours: number): void;
   update(deltaSeconds: number): void;
+  /** CLAUDE.md "Respect prefers-reduced-motion": SPEC section 10 calls out
+   * "no star twinkle" specifically under reduced motion. */
+  setReducedMotion(reduced: boolean): void;
 }
 
 interface Star {
@@ -140,26 +143,19 @@ export function createSky(seed: string): Sky {
       moon.alpha = moonPos.alpha;
     }
 
-    // Stars fade in around dusk and out around dawn (SPEC section 6). Full
-    // night spans across the midnight wrap (19:30 -> 4:30), so this can't be
-    // a single smoothstep across the raw hour value.
-    const h = ((hours % 24) + 24) % 24;
-    if (h >= 19.5 || h <= 4.5) {
-      nightFactor = 1;
-    } else if (h >= 17.5) {
-      nightFactor = smoothstep(17.5, 19.5, h);
-    } else if (h <= 6.5) {
-      nightFactor = 1 - smoothstep(4.5, 6.5, h);
-    } else {
-      nightFactor = 0;
-    }
+    // Stars fade in/out with the same night-factor curve the colony's own
+    // night-time activity reduction uses (see `environment/dayNight.ts`).
+    nightFactor = nightFactorForHour(hours);
   }
+
+  let reducedMotion = false;
 
   function update(deltaSeconds: number): void {
     elapsed += deltaSeconds;
     for (const star of stars) {
-      const twinkle =
-        1 - skyConfig.twinkleDepth * 0.5 * (1 + Math.sin(elapsed * skyConfig.twinkleSpeed + star.phase));
+      const twinkle = reducedMotion
+        ? 1
+        : 1 - skyConfig.twinkleDepth * 0.5 * (1 + Math.sin(elapsed * skyConfig.twinkleSpeed + star.phase));
       star.gfx.alpha = nightFactor * twinkle;
     }
     for (const cloud of clouds) {
@@ -170,5 +166,12 @@ export function createSky(seed: string): Sky {
 
   setHour(12);
 
-  return { container, setHour, update };
+  return {
+    container,
+    setHour,
+    update,
+    setReducedMotion(reduced: boolean): void {
+      reducedMotion = reduced;
+    },
+  };
 }

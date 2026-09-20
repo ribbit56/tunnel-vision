@@ -49,9 +49,41 @@ export const tunnels = {
   wetSoilMaxAlpha: 0.35,
 };
 
+/** Rain (SPEC section 6 "Rain") — kept muted and soft rather than saturated
+ * "storm" blues, matching CLAUDE.md's "calm, gentle" bar. */
+export const weather = {
+  cloudCover: '#8A93A6',
+  raindrop: '#CFE0EA',
+  splash: '#E7F0F5',
+  puddleWater: '#4A5A66',
+  puddleRipple: '#CFE0EA',
+  mushroomCap: '#C97B63',
+  mushroomStem: '#EDE0C8',
+};
+
+/** Small surprises (SPEC section 6 "Small surprises") — kept muted and soft,
+ * consistent with the rest of the palette rather than eye-catching. */
+export const surprises = {
+  earthworm: '#C98B6B',
+  beetle: '#4A3A2A',
+  beetleShell: '#6B5238',
+  butterfly: '#E3A857',
+  butterflyAccent: '#F3EAD6',
+  snail: '#8A9A6A',
+  snailShell: '#B8936A',
+  leaf: '#B8863A',
+  root: '#D8C3A0',
+};
+
 export const creatures = {
   workerBody: '#2E211C',
   workerHighlight: '#5A4036',
+  /** A thin body outline, not the fill — the fill stays dark so ants still
+   * read well against light grass (M11 contrast audit: the fill alone was
+   * only ~1.04:1 against the tunnel interior, nearly invisible; this rim
+   * gets that up to a clearly visible ~4.8:1 without changing how ants look
+   * against the surface, where the dark fill already contrasts fine). */
+  workerOutline: '#A9855F',
   queenBody: '#3A2620',
   queenAbdomenBand: '#7A4A2A',
   queenWings: '#EEF2F2',
@@ -69,7 +101,13 @@ export const ui = {
   textOnSky: '#FFF8EC',
   textOnPanel: '#3B2A20',
   honeyAccent: '#E3A857',
-  panelBackground: 'rgba(59, 42, 32, 0.55)',
+  /** M11 contrast audit: `textOnSky` against this panel, blended over the
+   * *lightest* sky keyframes (day/dawn horizon), only cleared WCAG AA's 4.5:1
+   * normal-text minimum once alpha reached about 0.65 — 0.55 bottomed out
+   * around 3.7:1 at the worst keyframe. Every text-on-sky element needs an
+   * actual panel behind it for this to apply (see styles.css's `#mode-toggle`
+   * and `#task-name`, which had none before). */
+  panelBackground: 'rgba(59, 42, 32, 0.65)',
 };
 
 export interface SkyColors {
@@ -126,4 +164,24 @@ export const soilDepthDimming = {
 export const globalTreatment = {
   paperGrainOpacity: 0.05,
   vignetteStrength: 0.12,
+  /** SPEC section 6: "scene light" blends `lightTint` across everything at
+   * or below the grass line (soil, surface, ants — the sky already gets its
+   * own dedicated gradient). Kept low: this is a gentle color-mood shift,
+   * not the main day/night darkening — that's `exposure`, applied
+   * separately so the two can't compound into "too dark." */
+  timeOfDayTintAlpha: 0.16,
+};
+
+/** Dev-mode-only debug colors (SPEC section 11 "planner chambers and jobs"
+ * overlay) — never shown to a real user, so these skip the storybook
+ * palette's restraint in favor of being easy to tell apart at a glance. */
+export const devOverlay = {
+  chamberOutlineByType: {
+    royal: '#E85A5A',
+    nursery: '#F3EAD6',
+    granary: '#D6A45C',
+    resting: '#7AC0E8',
+  },
+  connectorJob: '#7AE89A',
+  shaftJob: '#F3C64A',
 };

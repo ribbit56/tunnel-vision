@@ -34,7 +34,7 @@ export interface World {
   hardness: Float32Array;
   /** Index into MATERIALS. */
   material: Uint8Array;
-  /** 0..1, updated by weather starting in M8; all zero until then. */
+  /** 0..1, per SPEC section 6 "Rain" — see `updateMoisture`. */
   moisture: Float32Array;
   /** The strata layout this grid was rasterized from, reused by the
    * renderer so the soil texture matches exactly what's diggable. */
@@ -44,6 +44,15 @@ export interface World {
    * excluded from `totalVolumeDug` so that invariant reflects only what the
    * colony has actually dug, not the pre-existing entrance. */
   initialOpenVolume: number;
+  /** Cell-count shortest-path distance to the entrance, BFS'd over open
+   * cells; `Infinity` where unreached. Ants heading to the surface (SPEC
+   * section 5) follow its steepest descent rather than re-planning a full
+   * path every tick. Recomputed on a throttle — see `recomputeDistanceField`. */
+  distanceField: Float32Array;
+  /** Bumped every time the terrain actually changes (a dig that removed
+   * volume). Cheap signal callers use to know their cached paths or the
+   * distance field are stale, without diffing the grid themselves. */
+  terrainGeneration: number;
 }
 
 function clamp01(v: number): number {
@@ -110,7 +119,7 @@ export function createWorld(seed: string, gridW: number, gridH: number, cellSize
     }
   }
 
-  return {
+  const world: World = {
     gridW,
     gridH,
     cellSize,
@@ -121,7 +130,18 @@ export function createWorld(seed: string, gridW: number, gridH: number, cellSize
     strata,
     entranceCol,
     initialOpenVolume,
+    distanceField: new Float32Array(cellCount).fill(Infinity),
+    terrainGeneration: 0,
   };
+  recomputeDistanceField(world);
+  return world;
+}
+
+/** The world position ants path toward as "the entrance" — the center of
+ * the founding notch dug in `createWorld`. A few px below y=0 rather than
+ * exactly on it, so a path there always resolves to an actually-open cell. */
+export function entrancePosition(world: World): { x: number; y: number } {
+  return { x: (world.entranceCol + 0.5) * world.cellSize, y: world.cellSize * 1.5 };
 }
 
 export function cellIndex(world: World, cx: number, cy: number): number {
@@ -205,6 +225,8 @@ export function digBrush(
     }
   }
 
+  if (touched) world.terrainGeneration++;
+
   return {
     volumeRemoved,
     dirty: touched ? { minX, minY, maxX, maxY } : null,
@@ -226,9 +248,20 @@ export function mergeDirty(a: DirtyRect | null, b: DirtyRect | null): DirtyRect 
 }
 
 /** A cell counts as "open" once density drops below this — matches the
- * midpoint of the shader's own smoothstep threshold, so what the sim
- * considers open lines up with what the render actually shows as a tunnel. */
+ * midpoint of the shader's own smoothstep threshold (tunnels.frag.ts:
+ * `smoothstep(0.45, 0.55, 1 - density)`), so what the sim considers dug out
+ * at all lines up with the render's own open/solid boundary. Used for soil
+ * bookkeeping and the "every open cell reaches the entrance" invariant. */
 export const OPEN_THRESHOLD = 0.5;
+
+/** A stricter threshold ant navigation uses instead of `OPEN_THRESHOLD`
+ * (SPEC: "ants move only through open cells"). A cell can sit just under
+ * `OPEN_THRESHOLD` — freshly cracked open at the edge of a dig brush — while
+ * still rendering as mostly-solid soil, since the shader's own soft edge
+ * only finishes opening up at density 0.45 (plus a little further for its
+ * noise wobble). Routing ants only through cells comfortably past that keeps
+ * them from visibly walking through ground that still looks unopened. */
+export const WALKABLE_THRESHOLD = 0.3;
 
 /**
  * SPEC invariant: "every open cell is connected to the entrance." Flood-fills
@@ -271,4 +304,103 @@ export function totalVolumeDug(world: World): number {
   let sum = 0;
   for (let i = 0; i < world.density.length; i++) sum += 1 - world.density[i];
   return sum - world.initialOpenVolume;
+}
+
+export interface MoistureConfig {
+  moistureMaxDepthCells: number;
+  moistureRiseRatePerSecond: number;
+  moistureDryRatePerSecond: number;
+  moistureFrontRatePerSecond: number;
+}
+
+/**
+ * Advances `world.moisture` (SPEC section 6 "Rain": "a moisture front
+ * descends from the surface into the soil... wet soil darkens. It dries over
+ * about 10 minutes after rain ends"). `rainIntensity` is an externally-set
+ * `realTime` value (CLAUDE.md "Two clocks"), the same way `nightFactor`
+ * drives night-time behavior elsewhere — this runs every tick regardless of
+ * `focusRunning`, since weather doesn't pause for a break any more than day
+ * and night do.
+ *
+ * Rain falls uniformly, so every column at a given depth ends up with the
+ * same moisture — there's nothing here that varies with x. Each row is
+ * still computed and written across its full width (rather than storing one
+ * value per depth) to keep `world.moisture` a plain per-cell grid matching
+ * `density`/`hardness`, in case a future feature wants to read moisture at a
+ * specific point rather than a whole row.
+ */
+/** One row's moisture this tick: pulled up toward `incoming` (row 0's own
+ * rain, or the row above's freshly-updated value for deeper rows) at `rise`
+ * per second whenever it's wetter than this row, plus a constant slow drain
+ * at `dryRate` regardless — so a row only actually gets wetter while
+ * something above it still is, but always dries a little even mid-rain,
+ * giving the "rises fast, dries over ~10 minutes" shape SPEC calls for. */
+function stepMoistureRow(previous: number, incoming: number, rise: number, dryRate: number, dt: number): number {
+  let value = previous;
+  if (incoming > value) value += (incoming - value) * rise * dt;
+  value -= value * dryRate * dt;
+  return Math.min(1, Math.max(0, value));
+}
+
+export function updateMoisture(world: World, rainIntensity: number, dt: number, cfg: MoistureConfig): void {
+  const depth = Math.min(cfg.moistureMaxDepthCells, world.gridH);
+  let above = rainIntensity;
+
+  for (let cy = 0; cy < depth; cy++) {
+    const rowStart = cy * world.gridW;
+    const rise = cy === 0 ? cfg.moistureRiseRatePerSecond : cfg.moistureFrontRatePerSecond;
+    const value = stepMoistureRow(world.moisture[rowStart], above, rise, cfg.moistureDryRatePerSecond, dt);
+    world.moisture.fill(value, rowStart, rowStart + world.gridW);
+    above = value;
+  }
+}
+
+/**
+ * Recomputes `world.distanceField` in place: a breadth-first flood fill from
+ * the entrance over open cells, so every open cell's value is its shortest
+ * path length (in cell steps) back to the surface. This is what lets an ant
+ * "head for the entrance" by always stepping toward a smaller number, rather
+ * than re-running A* to the same destination over and over. Cells that
+ * aren't open, or aren't reachable yet, are left at `Infinity`.
+ *
+ * Callers (see `sim.ts`) throttle how often this runs, since a full BFS over
+ * the whole grid on every tick would be wasteful when most ticks don't
+ * change the terrain at all.
+ */
+export function recomputeDistanceField(world: World): void {
+  const { gridW, distanceField } = world;
+  distanceField.fill(Infinity);
+
+  const startIdx = cellIndex(world, world.entranceCol, 0);
+  // A plain array used as a FIFO queue with a head pointer, rather than
+  // shift()ing it — this is a hot path (a full-grid BFS) and shift() is
+  // O(n) per call, which would make the whole flood fill O(n^2).
+  const queue: number[] = [startIdx];
+  let head = 0;
+  distanceField[startIdx] = 0;
+
+  while (head < queue.length) {
+    const idx = queue[head++];
+    const dist = distanceField[idx];
+    const cx = idx % gridW;
+    const cy = Math.floor(idx / gridW);
+    const neighbors: [number, number][] = [
+      [cx - 1, cy],
+      [cx + 1, cy],
+      [cx, cy - 1],
+      [cx, cy + 1],
+    ];
+    for (const [nx, ny] of neighbors) {
+      if (!inBounds(world, nx, ny)) continue;
+      const nIdx = cellIndex(world, nx, ny);
+      // WALKABLE_THRESHOLD, not OPEN_THRESHOLD: this field only exists to
+      // steer ants (see ants/digger.ts's `stepMovingToSurface`), so it
+      // should only ever route them through cells they're actually allowed
+      // to walk on.
+      if (world.density[nIdx] >= WALKABLE_THRESHOLD) continue;
+      if (distanceField[nIdx] !== Infinity) continue;
+      distanceField[nIdx] = dist + 1;
+      queue.push(nIdx);
+    }
+  }
 }

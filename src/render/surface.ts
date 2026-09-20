@@ -4,13 +4,21 @@
 // simulation output now (sim/surface/mound.ts) and rendered separately in
 // render/mound.ts, since it grows from what the digger actually carries up.
 import { Container, Graphics } from 'pixi.js';
-import { grass as grassConfig, surfaceFeatures } from '../config';
+import { fireflies as firefliesConfig, grass as grassConfig, surfaceFeatures } from '../config';
 import { createStream } from '../sim/rng';
-import { surface as surfacePalette } from '../theme/palette';
+import { creatures, surface as surfacePalette } from '../theme/palette';
 
 export interface Surface {
   container: Container;
-  update(deltaSeconds: number): void;
+  /** `nightFactor` (0 full day, 1 full night) fades fireflies in and drives
+   * their glow pulse (SPEC section 6). */
+  update(deltaSeconds: number, nightFactor: number): void;
+  /** CLAUDE.md "Respect prefers-reduced-motion" — freezes fireflies' drift
+   * and pulse rather than hiding them outright. */
+  setReducedMotion(reduced: boolean): void;
+  /** SPEC section 6 "Rain": "one worker may plug the entrance with a pellet
+   * and unplug it after the rain ends" — shows or hides that pellet. */
+  setEntrancePlugged(plugged: boolean): void;
 }
 
 const WORLD_WIDTH = 1600;
@@ -66,6 +74,23 @@ function buildFlower(rng: () => number): Graphics {
   return gfx;
 }
 
+interface Firefly {
+  gfx: Graphics;
+  homeX: number;
+  homeY: number;
+  driftPhase: number;
+  pulsePhase: number;
+}
+
+function buildFirefly(): Graphics {
+  const gfx = new Graphics();
+  const r = firefliesConfig.glowRadius;
+  const color = parseInt(creatures.fireflyGlow.replace('#', ''), 16);
+  gfx.circle(0, 0, r * 2.5).fill({ color, alpha: 0.22 });
+  gfx.circle(0, 0, r).fill({ color, alpha: 1 });
+  return gfx;
+}
+
 function buildEntrance(): Graphics {
   const gfx = new Graphics();
   const r = surfaceFeatures.entranceRadius;
@@ -77,6 +102,18 @@ function buildEntrance(): Graphics {
   return gfx;
 }
 
+/** A small pellet-colored cap over the entrance opening (SPEC section 6:
+ * plugged with a pellet while it rains). Sized to sit just inside the dark
+ * opening `buildEntrance` draws, so it reads as blocking it rather than
+ * covering the whole crater. */
+function buildEntrancePlug(): Graphics {
+  const gfx = new Graphics();
+  const r = surfaceFeatures.entranceRadius;
+  gfx.ellipse(0, 0, r * 0.85, r * 0.32).fill({ color: parseInt(surfacePalette.moundFreshPellet.slice(1), 16) });
+  gfx.visible = false;
+  return gfx;
+}
+
 export function createSurface(seed: string): Surface {
   const rng = createStream(seed, 'render:surface');
   const container = new Container();
@@ -84,6 +121,10 @@ export function createSurface(seed: string): Surface {
   const entrance = buildEntrance();
   entrance.x = surfaceFeatures.entranceX;
   container.addChild(entrance);
+
+  const entrancePlug = buildEntrancePlug();
+  entrancePlug.x = surfaceFeatures.entranceX;
+  container.addChild(entrancePlug);
 
   const tufts: Tuft[] = [];
   for (let i = 0; i < grassConfig.tuftCount; i++) {
@@ -113,12 +154,28 @@ export function createSurface(seed: string): Surface {
   container.addChild(plant);
   tufts.push({ container: plant, phase: rng() * Math.PI * 2, ampScale: 0.5 });
 
+  // Fireflies (SPEC section 6): drift just above the grass, only visible as
+  // night falls. A separate layer so their alpha (tied to night factor) is
+  // independent of anything else in the container.
+  const fireflyLayer = new Container();
+  container.addChild(fireflyLayer);
+  const fireflyList: Firefly[] = [];
+  for (let i = 0; i < firefliesConfig.count; i++) {
+    const gfx = buildFirefly();
+    const homeX = rng() * WORLD_WIDTH;
+    const homeY = -6 - rng() * 24;
+    gfx.position.set(homeX, homeY);
+    fireflyLayer.addChild(gfx);
+    fireflyList.push({ gfx, homeX, homeY, driftPhase: rng() * Math.PI * 2, pulsePhase: rng() * Math.PI * 2 });
+  }
+
   let elapsed = rng() * 10;
+  let reducedMotion = false;
 
   return {
     container,
-    update(deltaSeconds: number): void {
-      elapsed += deltaSeconds;
+    update(deltaSeconds: number, nightFactor: number): void {
+      if (!reducedMotion) elapsed += deltaSeconds;
       for (const tuft of tufts) {
         const angle =
           Math.sin(elapsed * grassConfig.swaySpeed * Math.PI * 2 + tuft.phase) *
@@ -127,6 +184,25 @@ export function createSurface(seed: string): Surface {
           DEG_TO_RAD;
         tuft.container.rotation = angle;
       }
+
+      for (const firefly of fireflyList) {
+        if (!reducedMotion) {
+          const driftAngle = elapsed * firefliesConfig.driftSpeed * Math.PI * 2 + firefly.driftPhase;
+          firefly.gfx.x = firefly.homeX + Math.cos(driftAngle) * firefliesConfig.driftRadius;
+          firefly.gfx.y = firefly.homeY + Math.sin(driftAngle * 0.7) * firefliesConfig.driftRadius * 0.5;
+        }
+        // A gentle breathing glow, never fully dark mid-pulse — reduced
+        // motion holds it at the pulse's own midpoint instead of the peak,
+        // so it still reads as "glowing," just perfectly still.
+        const pulse = reducedMotion ? 0.7 : 0.55 + 0.45 * (0.5 + 0.5 * Math.sin(elapsed * firefliesConfig.pulseSpeed * Math.PI * 2 + firefly.pulsePhase));
+        firefly.gfx.alpha = nightFactor * pulse;
+      }
+    },
+    setReducedMotion(reduced: boolean): void {
+      reducedMotion = reduced;
+    },
+    setEntrancePlugged(plugged: boolean): void {
+      entrancePlug.visible = plugged;
     },
   };
 }

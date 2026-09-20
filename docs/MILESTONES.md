@@ -156,14 +156,15 @@ Scope:
 - Controls, task name field, settings panel with persistence
 - Idle fade, keyboard shortcuts, fullscreen
 - Tab title updates
-- Session summary with stats and **Save picture** (full-colony PNG)
+- Session summary with stats (no Save picture — scoped out during this
+  milestone, not wanted for v1)
 - Catch-up mode with the "While you were away" time-lapse; benchmark it (move
   sim to a Web Worker only if the budget can't be met)
 - Rendering stops while hidden
 
 Done when:
-- Playwright smoke test covers start, pause, resume, pomodoro transition, end
-  session, and save picture
+- Playwright smoke test covers start, pause, resume, pomodoro transition, and
+  end session
 - Hiding the tab for a simulated hour, then returning, catches up in under
   about 10 seconds with a smooth time-lapse
 - Keyboard-only use works; focus is visible

@@ -12,8 +12,7 @@ workers, and the workers dig a nest of shafts and chambers, carrying soil up to
 a mound that slowly grows beside the entrance.
 
 The colony only grows while the timer runs. At the end of a session, the nest
-and the mound are a visible picture of the focus the user put in, and they can
-save that picture.
+and the mound are a visible picture of the focus the user put in.
 
 Every session is unique (seeded), but always pretty (rules keep the nest
 shapely). The world around the colony lives on its own: days turn to night, rain
@@ -538,10 +537,9 @@ On End session, a soft panel shows:
 - focused time,
 - workers, brood, chambers, soil carried (pellets),
 - the seed,
-- **Save picture**: exports a PNG of the full colony (render the whole world to
-  an offscreen texture at 1x, with the task name and focused time set small in
-  a corner),
 - **Start a new colony** and **Keep watching**.
+
+(Save picture was scoped out during M6 — not wanted for v1.)
 
 ### Returning to a hidden tab
 

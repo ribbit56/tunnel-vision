@@ -1,6 +1,16 @@
-// Static timer display for M1's art-direction lock (SPEC section 8). Not
-// wired to a real clock yet — that's src/timer/focusClock.ts in M6.
-export function mountTimer(hud: HTMLElement): void {
+// The timer display (SPEC section 8 "Layout"/"Behavior"): a big Alegreya
+// readout over a soft backdrop, plus the editable task name. The actual
+// value comes from `src/timer/focusClock.ts` each frame — this module only
+// owns the DOM and formatting, never a clock of its own (CLAUDE.md "Timers
+// come from timestamps").
+export interface TimerUI {
+  /** The editable task-name field — read from directly (its `textContent`)
+   * for the tab title and session summary/save-picture caption. */
+  taskNameEl: HTMLDivElement;
+  setText(text: string): void;
+}
+
+export function mountTimer(hud: HTMLElement): TimerUI {
   const wrap = document.createElement('div');
   wrap.id = 'timer-wrap';
 
@@ -10,7 +20,7 @@ export function mountTimer(hud: HTMLElement): void {
 
   const timer = document.createElement('div');
   timer.id = 'timer';
-  timer.textContent = '25:00';
+  timer.textContent = '0:00';
   wrap.appendChild(timer);
 
   const taskName = document.createElement('div');
@@ -20,4 +30,11 @@ export function mountTimer(hud: HTMLElement): void {
   wrap.appendChild(taskName);
 
   hud.appendChild(wrap);
+
+  return {
+    taskNameEl: taskName,
+    setText(text: string): void {
+      timer.textContent = text;
+    },
+  };
 }

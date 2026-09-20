@@ -21,6 +21,8 @@
     "tests/**/*.ts",
     "e2e/**/*.ts",
     "src/sim/**/*.ts",
-    "src/config.ts"
+    "src/config.ts",
+    "src/timer/**/*.ts",
+    "src/environment/**/*.ts"
   ]
 }
