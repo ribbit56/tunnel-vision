@@ -216,7 +216,8 @@ export function hasLineOfSight(world: World, a: Point, b: Point): boolean {
 }
 
 /**
- * Longest a single string-pulled segment is allowed to span (world px). A
+ * Longest a single string-pulled segment is allowed to span (world px), as a
+ * coarse safety net alongside the more precise deviation check below. A
  * tunnel dug by the correlated random walk in `ants/digger.ts` curves
  * gradually rather than running perfectly straight, so a chord across a long
  * enough stretch of it can drift outside the actual dug width even though
@@ -228,21 +229,47 @@ export function hasLineOfSight(world: World, a: Point, b: Point): boolean {
  * 326px-long first leg into one straight segment, and by partway along it
  * the ant had drifted 16px off that line into ground that had never been
  * dug at all — well outside a shaft's own ~18px dug diameter
- * (`digging.brushRadiusCells` in config.ts is 2.25 cells, 9px radius).
- * Capped to a bit over double that diameter: long enough to still
- * meaningfully straighten the blocky grid path over a normal, gently
- * curving stretch, short enough that any one chord can only bow out by a
- * small fraction of the tunnel's own width before the next real waypoint
- * corrects course. */
-const MAX_STRING_PULL_SEGMENT_DISTANCE = 40;
+ * (`digging.brushRadiusCells` in config.ts is 2.25 cells, 9px radius). */
+const MAX_STRING_PULL_SEGMENT_DISTANCE = 18;
+
+/**
+ * How far a skipped raw waypoint is allowed to sit off the straight chord
+ * that replaces it (world px) — the more precise counterpart to the length
+ * cap above. Length alone is an indirect proxy for "does this chord bow
+ * outside the tunnel": a sharp bend (a hardness deflection around a rock or
+ * clay pocket, for instance) can curve by more in a short distance than a
+ * gentle stretch does over a much longer one, so a length cap tight enough
+ * to catch every sharp bend also cuts into gentle, genuinely-straight
+ * stretches for no reason. Measuring each skipped point's actual
+ * perpendicular distance from the candidate chord instead means a long,
+ * truly straight run still collapses to one segment (every skipped point
+ * sits right on it), while a chord that would cut across a bend gets
+ * rejected regardless of how short that bend's own span happens to be.
+ * Comfortably inside a shaft's own ~9px dug radius, with margin left over
+ * for the movement drift `ants/digger.ts`'s `followPath` doc comment
+ * describes (turning lag while it catches up to a new heading). */
+const MAX_STRING_PULL_DEVIATION = 3;
+
+/** Perpendicular distance from `p` to the line through `a` and `b` (or, if
+ * they coincide, straight-line distance from `p` to `a`). */
+function perpendicularDistance(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared < 0.0001) return Math.hypot(p.x - a.x, p.y - a.y);
+  const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSquared;
+  const projectedX = a.x + t * dx;
+  const projectedY = a.y + t * dy;
+  return Math.hypot(p.x - projectedX, p.y - projectedY);
+}
 
 /**
  * String-pulling: greedily extends a line of sight from each kept waypoint
- * as far as it can before the straight line would clip a wall or exceed
- * `MAX_STRING_PULL_SEGMENT_DISTANCE`, dropping everything in between. Turns
- * a blocky grid path into a handful of natural-looking straight segments
- * (SPEC section 5 "path smoothing") without over-straightening a stretch
- * that isn't actually straight.
+ * as far as it can before the straight line would clip a wall, bow too far
+ * from a skipped point, or exceed `MAX_STRING_PULL_SEGMENT_DISTANCE`,
+ * dropping everything in between. Turns a blocky grid path into a handful of
+ * natural-looking straight segments (SPEC section 5 "path smoothing")
+ * without over-straightening a stretch that isn't actually straight.
  */
 export function stringPull(world: World, points: Point[]): Point[] {
   if (points.length <= 2) return points;
@@ -251,8 +278,20 @@ export function stringPull(world: World, points: Point[]): Point[] {
   for (let i = 1; i < points.length - 1; i++) {
     const anchorPoint = points[anchor];
     const candidate = points[i + 1];
+
+    // Cheapest check first, so a segment that's already too long skips the
+    // deviation scan and hasLineOfSight's own per-half-cell sampling
+    // entirely, rather than doing that work and then throwing it away.
     const dist = Math.hypot(candidate.x - anchorPoint.x, candidate.y - anchorPoint.y);
-    if (dist > MAX_STRING_PULL_SEGMENT_DISTANCE || !hasLineOfSight(world, anchorPoint, candidate)) {
+    let tooFar = dist > MAX_STRING_PULL_SEGMENT_DISTANCE;
+
+    if (!tooFar) {
+      for (let j = anchor + 1; j <= i && !tooFar; j++) {
+        if (perpendicularDistance(points[j], anchorPoint, candidate) > MAX_STRING_PULL_DEVIATION) tooFar = true;
+      }
+    }
+
+    if (tooFar || !hasLineOfSight(world, anchorPoint, candidate)) {
       result.push(points[i]);
       anchor = i;
     }

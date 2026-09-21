@@ -293,7 +293,14 @@ export function createQueen(seed: string, world: World, queenCfg: QueenConfig, m
   const ant = createBaseAnt(rng, entrance.x, -queenCfg.glideStartHeight, Math.PI / 2, 'queen', queenCfg.speed, movementCfg);
   ant.phase = 'queenGliding';
   ant.wingsAlpha = 1;
-  ant.queenLandOffsetX = (rng() - 0.5) * 2 * 12;
+  // Her founding walk is scripted straight-line motion (see stepQueenWalking),
+  // not pathfinding, so nothing validates it against the terrain — it has to
+  // stay inside the pre-opened entrance notch on its own (world.ts carves it
+  // 3 cells wide, so ±1.5 cells from center; ±1 cell here leaves a half-cell
+  // of margin on each side rather than cutting it exactly at the edge).
+  // ±12 world px previously could walk her half a tunnel-width outside that
+  // notch, onto ground that had never been dug.
+  ant.queenLandOffsetX = (rng() - 0.5) * 2 * world.cellSize;
   return ant;
 }
 

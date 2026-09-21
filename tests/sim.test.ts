@@ -117,6 +117,14 @@ describe('colony planner', () => {
   // well past the founding period so the planner has actually placed several
   // chambers to check.
   for (const seed of ['acorn', 'birch', 'cedar']) {
+    // Some seeds' terrain needs more, shorter smoothed path segments to keep
+    // a walked route hugging the tunnel's actual curve closely enough to
+    // never visibly cross undug ground (ants/pathing.ts's `stringPull`) —
+    // real, necessary cost for that correctness, paid here all at once
+    // synchronously instead of spread across 120 real minutes (or a
+    // catch-up run's own per-frame budget) the way actual play spreads it,
+    // so it needs more headroom than the 90s this used to comfortably fit
+    // in (seed "birch" specifically now runs close to that on its own).
     it(`places no overlapping chambers for seed "${seed}" after 2 focused hours`, () => {
       const sim = createSimulation(seed);
       advanceFocus(sim, 120);
@@ -136,7 +144,7 @@ describe('colony planner', () => {
           expect(tooClose).toBe(false);
         }
       }
-    }, 90_000);
+    }, 180_000);
   }
 
   it('grows shafts, chambers, workers, and the mound over a 2-hour-equivalent session', () => {
@@ -148,7 +156,7 @@ describe('colony planner', () => {
     expect(sim.mound.totalDeposited).toBeGreaterThan(0);
     expect(workerCount(sim)).toBeGreaterThan(10);
     expect(isConnectedToEntrance(sim.world)).toBe(true);
-  }, 60_000);
+  }, 120_000);
 });
 
 describe('pacing curve', () => {
@@ -168,7 +176,7 @@ describe('pacing curve', () => {
       previousCount = actual;
     }
     expect(previousCount).toBeGreaterThan(0);
-  }, 60_000);
+  }, 120_000);
 });
 
 describe('resting when focus is paused', () => {
