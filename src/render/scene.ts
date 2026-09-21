@@ -197,8 +197,14 @@ export function createScene(app: Application, seed: string, world: World): Scene
     nightFactor = nightFactorForHour(hours);
 
     const { exposure, lightTint } = sampleTimeOfDay(hours);
-    exposureLayer.clear().rect(0, 0, WORLD_WIDTH, worldDepth).fill({ color: 0x000000, alpha: 1 - exposure });
-    tintLayer.clear().rect(0, 0, WORLD_WIDTH, worldDepth).fill({ color: lightTint, alpha: globalTreatment.timeOfDayTintAlpha });
+    // Covers the same widened backdrop `render/soil.ts` draws (see its own
+    // comment) so the decorative overscan margin dims/tints for time of day
+    // exactly like the functional soil does, instead of staying at full
+    // brightness as a visible "halo" around it.
+    const dimLeft = -worldConfig.backgroundMargin;
+    const dimWidth = WORLD_WIDTH + worldConfig.backgroundMargin * 2;
+    exposureLayer.clear().rect(dimLeft, 0, dimWidth, worldDepth).fill({ color: 0x000000, alpha: 1 - exposure });
+    tintLayer.clear().rect(dimLeft, 0, dimWidth, worldDepth).fill({ color: lightTint, alpha: globalTreatment.timeOfDayTintAlpha });
   }
 
   resize(app.screen.width, app.screen.height);

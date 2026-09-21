@@ -216,17 +216,43 @@ export function hasLineOfSight(world: World, a: Point, b: Point): boolean {
 }
 
 /**
+ * Longest a single string-pulled segment is allowed to span (world px). A
+ * tunnel dug by the correlated random walk in `ants/digger.ts` curves
+ * gradually rather than running perfectly straight, so a chord across a long
+ * enough stretch of it can drift outside the actual dug width even though
+ * `hasLineOfSight`'s own sampling (every half a cell) technically clears —
+ * the sampled points can each land just inside a gently curving tunnel while
+ * the chord *between* them bows out past its wall, and the ant visibly
+ * walking that chord bows out right along with it. Confirmed by tracing a
+ * real case: a fresh, correctly-computed shaft job's path collapsed a
+ * 326px-long first leg into one straight segment, and by partway along it
+ * the ant had drifted 16px off that line into ground that had never been
+ * dug at all — well outside a shaft's own ~18px dug diameter
+ * (`digging.brushRadiusCells` in config.ts is 2.25 cells, 9px radius).
+ * Capped to a bit over double that diameter: long enough to still
+ * meaningfully straighten the blocky grid path over a normal, gently
+ * curving stretch, short enough that any one chord can only bow out by a
+ * small fraction of the tunnel's own width before the next real waypoint
+ * corrects course. */
+const MAX_STRING_PULL_SEGMENT_DISTANCE = 40;
+
+/**
  * String-pulling: greedily extends a line of sight from each kept waypoint
- * as far as it can before the straight line would clip a wall, dropping
- * everything in between. Turns a blocky grid path into a handful of
- * natural-looking straight segments (SPEC section 5 "path smoothing").
+ * as far as it can before the straight line would clip a wall or exceed
+ * `MAX_STRING_PULL_SEGMENT_DISTANCE`, dropping everything in between. Turns
+ * a blocky grid path into a handful of natural-looking straight segments
+ * (SPEC section 5 "path smoothing") without over-straightening a stretch
+ * that isn't actually straight.
  */
 export function stringPull(world: World, points: Point[]): Point[] {
   if (points.length <= 2) return points;
   const result: Point[] = [points[0]];
   let anchor = 0;
   for (let i = 1; i < points.length - 1; i++) {
-    if (!hasLineOfSight(world, points[anchor], points[i + 1])) {
+    const anchorPoint = points[anchor];
+    const candidate = points[i + 1];
+    const dist = Math.hypot(candidate.x - anchorPoint.x, candidate.y - anchorPoint.y);
+    if (dist > MAX_STRING_PULL_SEGMENT_DISTANCE || !hasLineOfSight(world, anchorPoint, candidate)) {
       result.push(points[i]);
       anchor = i;
     }

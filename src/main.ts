@@ -359,6 +359,7 @@ async function main(): Promise<void> {
 
     if (catchUpRun) {
       const done = stepCatchUp(catchUpRun, sim, FIXED_DT, catchUpConfig.msBudgetPerFrame, () => performance.now());
+      catchUpCaption.setProgress(catchUpRun.ticksDone / catchUpRun.totalTicks);
       scene.syncFromSim(sim, { minX: 0, minY: 0, maxX: sim.world.gridW - 1, maxY: sim.world.gridH - 1 });
       scene.renderInterpolated(sim, 1, deltaSeconds);
       if (done) {

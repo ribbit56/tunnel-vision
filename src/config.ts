@@ -24,6 +24,17 @@ export const world = {
   gridH: 300,
   cellSize: 4,
   skyHeightAboveSurface: 520,
+  /** How far beyond the functional terrain grid's own width (`gridW *
+   * cellSize`, 1600px — where digging can actually happen) the purely
+   * decorative backdrop (sky gradient, stars, grass, and a plain soil-color
+   * fill) extends on *each* side. The camera's auto-framing now favors
+   * filling the viewport over strictly containing the nest (see
+   * `render/camera.ts`), which on a wide monitor — or a nest that's grown
+   * wider than 1600px — can show more width than the functional grid has
+   * art for; this margin is what's shown there instead of black. Sized for
+   * a very wide (e.g. ultrawide) monitor at the camera's minimum auto-zoom;
+   * manually scrolling out further than that can still reach the edge. */
+  backgroundMargin: 1600,
 };
 
 export const sky = {
@@ -362,7 +373,17 @@ export const idleFade = {
 /** Catch-up mode after a hidden tab (SPEC section 8 "Returning to a hidden
  * tab"). */
 export const catchUp = {
-  msBudgetPerFrame: 8,
+  // SPEC's own 8ms figure benchmarked at ~40s of real time to catch up one
+  // missed hour on a mature colony — well past its "under about 10 seconds"
+  // ideal (see timer/catchUp.ts's own note on why: it reuses the normal,
+  // full-fidelity step rather than SPEC's suggested coarser/simplified one,
+  // to stay simple and fully deterministic). Bumped well past 8ms as a
+  // stopgap: catch-up only ever runs while the tab was just hidden (nothing
+  // for the user to interact with yet), so spending more of each frame on it
+  // is a good trade against a long real-world wait that otherwise reads as
+  // "did I actually miss any progress?" — a proper fix (SPEC's suggested
+  // coarser timestep, or a Web Worker) is still the real long-term answer.
+  msBudgetPerFrame: 24,
   capMinutes: 180,
 };
 

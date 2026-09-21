@@ -23,6 +23,16 @@ interface Star {
 
 const SKY_TOP_Y = -world.skyHeightAboveSurface;
 const SKY_WIDTH = world.gridW * world.cellSize;
+// The gradient backdrop and star field extend well past the functional
+// grid on both sides (see `config.ts`'s `world.backgroundMargin`), so a
+// wide viewport or a wide-spread nest — the camera now favors filling the
+// viewport over strictly containing the nest, see `render/camera.ts` —
+// shows more sky instead of black. Sun/moon/clouds stay within the
+// original width: they're focal, animated elements that should keep
+// tracking the functional area the colony actually lives in, not drift
+// out into the overscan margin.
+const BACKDROP_LEFT = -world.backgroundMargin;
+const BACKDROP_WIDTH = SKY_WIDTH + world.backgroundMargin * 2;
 
 function smoothstep(edge0: number, edge1: number, x: number): number {
   const t = Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0)));
@@ -82,11 +92,15 @@ export function createSky(seed: string): Sky {
   const stars: Star[] = [];
   const starLayer = new Container();
   container.addChild(starLayer);
-  for (let i = 0; i < skyConfig.starCount; i++) {
+  // Scaled up by how much wider the backdrop is than the original sky
+  // width, so star *density* stays the same as it spreads across the wider
+  // area instead of thinning out.
+  const starCount = Math.round(skyConfig.starCount * (BACKDROP_WIDTH / SKY_WIDTH));
+  for (let i = 0; i < starCount; i++) {
     const gfx = new Graphics();
     const r = 0.6 + rng() * 1.2;
     gfx.circle(0, 0, r).fill({ color: creatures.stars, alpha: 1 });
-    gfx.x = rng() * SKY_WIDTH;
+    gfx.x = BACKDROP_LEFT + rng() * BACKDROP_WIDTH;
     gfx.y = SKY_TOP_Y + rng() * (world.skyHeightAboveSurface - 60);
     starLayer.addChild(gfx);
     stars.push({ gfx, phase: rng() * Math.PI * 2 });
@@ -123,7 +137,7 @@ export function createSky(seed: string): Sky {
         { offset: 1, color: colors.skyHorizon },
       ],
     });
-    gradient.rect(0, SKY_TOP_Y, SKY_WIDTH, world.skyHeightAboveSurface).fill(fill);
+    gradient.rect(BACKDROP_LEFT, SKY_TOP_Y, BACKDROP_WIDTH, world.skyHeightAboveSurface).fill(fill);
 
     const sunApex = SKY_TOP_Y + 24;
     const moonApex = SKY_TOP_Y + 55;

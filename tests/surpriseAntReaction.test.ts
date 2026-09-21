@@ -17,6 +17,12 @@ function untilSurfaceForager(sim: Simulation): ReturnType<typeof findSurfaceFora
 }
 
 describe('surface ants pause for a passing beetle (SPEC section 6)', () => {
+  // Each test runs a real 30-focus-minute bootstrap plus up to 5 more
+  // simulated minutes hunting for a forager on the surface — trivial for the
+  // sim itself, but slow enough end to end (and sensitive to this process's
+  // own JIT warmup, worst on whichever test runs first) to want more than
+  // vitest's default budget, the same as sim.test.ts's own long-running
+  // tests.
   it('pauses a surface-walking forager right at the surprise position', () => {
     const sim = createSimulation('acorn');
     advanceFocus(sim, 30);
@@ -27,7 +33,7 @@ describe('surface ants pause for a passing beetle (SPEC section 6)', () => {
     sim.surfaceSurpriseX = forager.x;
     stepSimulation(sim, DT);
     expect(forager.currentSpeed).toBe(0);
-  });
+  }, 30_000);
 
   it('does not pause when the surprise is far away', () => {
     const sim = createSimulation('acorn');
@@ -41,7 +47,7 @@ describe('surface ants pause for a passing beetle (SPEC section 6)', () => {
     // Either still walking (speed > 0) or it just arrived/changed phase —
     // either way, it must not be the pause path specifically.
     if (SURFACE_PHASES.has(forager.phase)) expect(forager.currentSpeed).toBeGreaterThan(0);
-  });
+  }, 30_000);
 
   it('resumes once the surprise moves away', () => {
     const sim = createSimulation('acorn');
@@ -57,5 +63,5 @@ describe('surface ants pause for a passing beetle (SPEC section 6)', () => {
     sim.surfaceSurpriseX = null;
     stepSimulation(sim, DT);
     if (SURFACE_PHASES.has(forager.phase)) expect(forager.currentSpeed).toBeGreaterThan(0);
-  });
+  }, 30_000);
 });

@@ -59,16 +59,34 @@ interface AutoTarget {
   centerX: number;
 }
 
-/** A "contain" fit — the whole nest visible, nothing cropped — unlike M1's
- * fixed placeholder camera, which deliberately filled ("covered") the
- * viewport and cropped left/right on a narrow window instead. */
+/**
+ * A "cover" fit — the viewport is always fully filled, rather than a
+ * "contain" fit that shrinks until *both* dimensions merely fit (which
+ * leaves whichever dimension had spare room under-filled). On a typical
+ * wide desktop window the world's own height need was the tighter
+ * constraint, so contain-fit zoomed out to satisfy it and left the sides
+ * empty — most desktop windows are noticeably wider than the roughly
+ * square minimum-framing area, so this wasn't a rare edge case.
+ *
+ * Taking the larger of the two candidate scales (rather than the smaller)
+ * means whichever dimension has spare room just shows *more* world than
+ * the bare minimum (more sky/soil depth, or more width either side of the
+ * nest) instead of leaving blank space — never a problem, since there's
+ * always more soil/sky to show. The one thing this trades away is M4's
+ * original "never crop the nest" guarantee on a narrow/tall window: a very
+ * wide, mature nest could have its edges run past a narrow viewport. In
+ * practice this doesn't regress phones specifically, since `MIN_AUTO_SCALE`
+ * already stops the camera from zooming out indefinitely to keep a big
+ * nest fully framed — a sufficiently wide nest already relies on the user
+ * panning to see all of it either way.
+ */
 function computeAutoTarget(bounds: NestBounds, viewportWidth: number, viewportHeight: number): AutoTarget {
   const neededHeight = Math.max(layout.minVisibleWorldHeight, bounds.maxDepth + FRAMING_MARGIN);
   const neededWidth = Math.max(WORLD_WIDTH, bounds.maxX - bounds.minX + FRAMING_MARGIN * 2);
 
   const scaleForHeight = viewportHeight / neededHeight;
   const scaleForWidth = viewportWidth / neededWidth;
-  const scale = Math.max(MIN_AUTO_SCALE, Math.min(scaleForHeight, scaleForWidth));
+  const scale = Math.max(MIN_AUTO_SCALE, scaleForHeight, scaleForWidth);
 
   return { scale, centerX: (bounds.minX + bounds.maxX) / 2 };
 }

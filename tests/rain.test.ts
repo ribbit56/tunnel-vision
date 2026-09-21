@@ -13,6 +13,11 @@ function populatedSimulation(seed: string): Simulation {
 }
 
 describe('entrance plug/unplug (SPEC section 6 "Rain")', () => {
+  // Each test below runs a real 30-focus-minute colony bootstrap
+  // (`populatedSimulation`) plus up to another 30 simulated seconds of
+  // ticks — trivial for the sim itself, but slow enough end to end (and
+  // sensitive to this process's own JIT warmup) to want more than vitest's
+  // default budget, the same as sim.test.ts's own long-running tests.
   it('plugs the entrance with an idle worker once it starts raining', () => {
     const sim = populatedSimulation('acorn');
     expect(sim.entrancePlugged).toBe(false);
@@ -29,7 +34,7 @@ describe('entrance plug/unplug (SPEC section 6 "Rain")', () => {
 
     expect(sawPlugging).toBe(true);
     expect(sim.entrancePlugged).toBe(true);
-  });
+  }, 30_000);
 
   it('unplugs again once the rain ends', () => {
     const sim = populatedSimulation('acorn');
@@ -43,7 +48,7 @@ describe('entrance plug/unplug (SPEC section 6 "Rain")', () => {
     for (let i = 0; i < 30 * 30 && sim.entrancePlugged; i++) stepSimulation(sim, DT);
 
     expect(sim.entrancePlugged).toBe(false);
-  });
+  }, 30_000);
 
   it('never has two ants handling the entrance at once', () => {
     const sim = populatedSimulation('acorn');
@@ -54,5 +59,5 @@ describe('entrance plug/unplug (SPEC section 6 "Rain")', () => {
       const handling = sim.ants.filter((ant) => ant.phase === 'plugEntrance' || ant.phase === 'unplugEntrance').length;
       expect(handling).toBeLessThanOrEqual(1);
     }
-  });
+  }, 30_000);
 });

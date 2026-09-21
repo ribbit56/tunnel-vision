@@ -31,6 +31,13 @@ export interface WeatherRenderer {
 const WORLD_WIDTH = worldConfig.gridW * worldConfig.cellSize;
 const SKY_TOP_Y = -worldConfig.skyHeightAboveSurface;
 const WET_BAND_DEPTH = weatherConfig.moistureMaxDepthCells * worldConfig.cellSize;
+// The full-scene dimming/tint overlays below cover the same widened
+// backdrop `render/soil.ts`/`sky.ts` draw, so an overcast/rainy sky dims
+// the decorative overscan margin too — raindrops and cloud puffs
+// themselves stay within the original width, same reasoning as sky.ts's
+// sun/moon/clouds (focal, animated elements tracking the functional area).
+const BACKDROP_LEFT = -worldConfig.backgroundMargin;
+const BACKDROP_WIDTH = WORLD_WIDTH + worldConfig.backgroundMargin * 2;
 
 function hex(c: string): number {
   return parseInt(c.replace('#', ''), 16);
@@ -138,7 +145,9 @@ export function createWeatherRenderer(seed: string): WeatherRenderer {
   // Softens the light while it's cloudy/raining — drawn once at full alpha
   // and covering the whole scene, then just modulated per frame so this
   // never needs redrawing.
-  const cloudTint = new Graphics().rect(0, SKY_TOP_Y, WORLD_WIDTH, worldConfig.skyHeightAboveSurface + worldConfig.gridH * worldConfig.cellSize).fill({ color: hex(weatherPalette.cloudCover) });
+  const cloudTint = new Graphics()
+    .rect(BACKDROP_LEFT, SKY_TOP_Y, BACKDROP_WIDTH, worldConfig.skyHeightAboveSurface + worldConfig.gridH * worldConfig.cellSize)
+    .fill({ color: hex(weatherPalette.cloudCover) });
   cloudTint.blendMode = 'multiply';
   cloudTint.alpha = 0;
   container.addChild(cloudTint);
@@ -147,7 +156,7 @@ export function createWeatherRenderer(seed: string): WeatherRenderer {
   // `wetSoilMultiply`/`wetSoilMaxAlpha`) — a gradient baked once, faded out
   // by depth, then modulated by the smoothed `wetness` scalar below.
   const wetBand = new Graphics()
-    .rect(0, 0, WORLD_WIDTH, WET_BAND_DEPTH)
+    .rect(BACKDROP_LEFT, 0, BACKDROP_WIDTH, WET_BAND_DEPTH)
     .fill({ color: hex(tunnelPalette.wetSoilMultiply) });
   wetBand.blendMode = 'multiply';
   wetBand.alpha = 0;

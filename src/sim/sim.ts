@@ -283,10 +283,24 @@ export function stepSimulation(sim: Simulation, dt: number): SimStepResult {
         // into 'movingToTarget'/'pausing' for the long run, so those are the
         // phases that actually hold the "free right now" ants worth picking
         // from (the same three `rebalanceRoles` treats as reassignable).
-        const freeWorker = sim.ants.find(
+        const freeWorkers = sim.ants.filter(
           (ant) => ant.role !== 'queen' && (ant.phase === 'idle' || ant.phase === 'movingToTarget' || ant.phase === 'pausing'),
         );
-        if (freeWorker) freeWorker.phase = wantsPlugged ? 'plugEntrance' : 'unplugEntrance';
+        // A worker whose exact position can't actually path to the entrance
+        // (vanishingly rare, but ground the correlated-random-walk digging
+        // generates can pinch off a cell-sized pocket with no way out) would
+        // otherwise bounce straight back to 'idle' next tick and — since
+        // `Array.prototype.find` always returns the same first match in
+        // array order — get re-picked forever, permanently starving every
+        // other free worker out of ever taking the job. Picking uniformly at
+        // random among every free worker instead means a cursed one only
+        // ever has a `1/freeWorkers.length` chance of being picked again
+        // each retry, so a normal-sized colony recovers within a tick or two
+        // instead of never.
+        if (freeWorkers.length > 0) {
+          const freeWorker = freeWorkers[Math.floor(sim.lifecycle.rng() * freeWorkers.length)];
+          freeWorker.phase = wantsPlugged ? 'plugEntrance' : 'unplugEntrance';
+        }
       }
     }
   }

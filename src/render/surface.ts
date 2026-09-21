@@ -4,7 +4,7 @@
 // simulation output now (sim/surface/mound.ts) and rendered separately in
 // render/mound.ts, since it grows from what the digger actually carries up.
 import { Container, Graphics } from 'pixi.js';
-import { fireflies as firefliesConfig, grass as grassConfig, surfaceFeatures } from '../config';
+import { fireflies as firefliesConfig, grass as grassConfig, surfaceFeatures, world as worldConfig } from '../config';
 import { createStream } from '../sim/rng';
 import { creatures, surface as surfacePalette } from '../theme/palette';
 
@@ -22,6 +22,13 @@ export interface Surface {
 }
 
 const WORLD_WIDTH = 1600;
+// Grass, flowers, and fireflies scatter across a wider decorative overscan
+// margin either side of the functional width too (see `config.ts`'s
+// `world.backgroundMargin` and `render/sky.ts`'s matching treatment), so a
+// wide viewport shows more surface dressing instead of black.
+const BACKDROP_LEFT = -worldConfig.backgroundMargin;
+const BACKDROP_WIDTH = WORLD_WIDTH + worldConfig.backgroundMargin * 2;
+const BACKDROP_DENSITY_SCALE = BACKDROP_WIDTH / WORLD_WIDTH;
 const DEG_TO_RAD = Math.PI / 180;
 
 interface Tuft {
@@ -126,9 +133,10 @@ export function createSurface(seed: string): Surface {
   entrancePlug.x = surfaceFeatures.entranceX;
   container.addChild(entrancePlug);
 
+  const tuftCount = Math.round(grassConfig.tuftCount * BACKDROP_DENSITY_SCALE);
   const tufts: Tuft[] = [];
-  for (let i = 0; i < grassConfig.tuftCount; i++) {
-    const x = rng() * WORLD_WIDTH;
+  for (let i = 0; i < tuftCount; i++) {
+    const x = BACKDROP_LEFT + rng() * BACKDROP_WIDTH;
     // Keep the grass from growing directly out of the entrance/mound.
     if (Math.abs(x - surfaceFeatures.entranceX) < surfaceFeatures.entranceKeepout) continue;
     const tuft = buildTuft(rng);
@@ -138,8 +146,9 @@ export function createSurface(seed: string): Surface {
     tufts.push({ container: tuft, phase: rng() * Math.PI * 2, ampScale: 0.6 + rng() * 0.8 });
   }
 
-  for (let i = 0; i < grassConfig.flowerCount; i++) {
-    const x = rng() * WORLD_WIDTH;
+  const flowerCount = Math.round(grassConfig.flowerCount * BACKDROP_DENSITY_SCALE);
+  for (let i = 0; i < flowerCount; i++) {
+    const x = BACKDROP_LEFT + rng() * BACKDROP_WIDTH;
     if (Math.abs(x - surfaceFeatures.entranceX) < surfaceFeatures.entranceKeepout) continue;
     const flower = buildFlower(rng);
     flower.x = x;
@@ -160,9 +169,10 @@ export function createSurface(seed: string): Surface {
   const fireflyLayer = new Container();
   container.addChild(fireflyLayer);
   const fireflyList: Firefly[] = [];
-  for (let i = 0; i < firefliesConfig.count; i++) {
+  const fireflyCount = Math.round(firefliesConfig.count * BACKDROP_DENSITY_SCALE);
+  for (let i = 0; i < fireflyCount; i++) {
     const gfx = buildFirefly();
-    const homeX = rng() * WORLD_WIDTH;
+    const homeX = BACKDROP_LEFT + rng() * BACKDROP_WIDTH;
     const homeY = -6 - rng() * 24;
     gfx.position.set(homeX, homeY);
     fireflyLayer.addChild(gfx);
