@@ -24,7 +24,7 @@ import { createStream } from '../rng';
 import type { Mound } from '../surface/mound';
 import { depositPellet } from '../surface/mound';
 import type { DirtyRect, World } from '../world';
-import { digBrush, entrancePosition, isDiggable, sampleHardness } from '../world';
+import { bilinearOpenAmount, digBrush, entrancePosition, isDiggable, isVisuallyOpen, sampleHardness } from '../world';
 import { findPath, hasLineOfSight, isOpenCell, stringPull } from './pathing';
 import { angleDiff, arriveSpeedFactor, turnToward, type Point } from './steering';
 
@@ -150,6 +150,29 @@ export interface Ant {
    * rather than dead center (SPEC: "hug tunnel floors and walls slightly
    * rather than floating in the middle"). */
   hugOffset: number;
+  /** Seconds left before `ensurePath` will attempt another recovery search
+   * while this ant's own position isn't visually open (see `ensurePath`).
+   * A straight "once per occurrence" flag isn't enough on its own: an ant
+   * whose current spot genuinely has no path to anywhere (which should
+   * never legitimately happen but is worth surviving rather than assuming
+   * away) bounces back to idle and picks a *different* target practically
+   * every tick, and each distinct target defeats a same-target-only
+   * throttle just as fast as no throttle at all. A real cooldown bounds
+   * retries to a fixed rate no matter how many different targets get tried
+   * in between. */
+  pathRecoveryCooldownSeconds: number;
+  /** Seconds `followPath` has refused to move this ant because the next step
+   * would land somewhere not visually open (see that function). A validated
+   * chord assumes the ant walks it in a straight line, but `heading` only
+   * *chases* the bearing to the next waypoint at a capped turn rate, so right
+   * after a sharp retarget the real, arcing trajectory can briefly have no
+   * safe heading at all — most acutely in the narrow, hard-edged founding
+   * entrance notch, too tight to turn around in without a wall clipping the
+   * arc either way. Once this drags on, the fault almost certainly isn't a
+   * turn that just needs another moment — it's a path built from a start
+   * point or heading that this exact spot can't actually walk from, so the
+   * fix is a fresh path, not more patience. */
+  blockedSeconds: number;
 
   // --- wandering (idler role, or a digger/queen with nothing to do) ---
   wanderPauseRemaining: number;
@@ -179,7 +202,7 @@ export interface MovementConfig {
   speedMax: number;
   maxTurnRate: number;
   arriveRadius: number;
-  waypointRadius: number;
+  finalArriveRadius: number;
   separationRadius: number;
   separationStrength: number;
   hugOffsetMax: number;
@@ -273,6 +296,8 @@ function createBaseAnt(rng: Rng, x: number, y: number, heading: number, role: An
     path: null,
     pathIndex: 0,
     hugOffset,
+    pathRecoveryCooldownSeconds: 0,
+    blockedSeconds: 0,
     wanderPauseRemaining: 0,
     rng,
   };
@@ -335,6 +360,17 @@ function effectiveHardness(world: World, worldX: number, worldY: number, edgeMar
  * where string-pulling likes to place a waypoint), a final pass confirms
  * every segment of the hugged path still has line of sight end to end,
  * discarding the whole offset for this path if not. */
+/** A hugged waypoint needs more headroom than the bare "visually open" bar
+ * (`isVisuallyOpen`'s own 0.6 cutoff) — pushing toward a wall on purpose is
+ * exactly the case where a point can pass that bar by the thinnest possible
+ * margin, and an ant's actual turning/stepping physics rarely retraces the
+ * exact validated line closely enough to stay above a bar with zero margin
+ * to spare. Requiring comfortable clearance here instead means a hugged
+ * point that gets accepted stays safely open even when the real walk drifts
+ * a little from the ideal line, rather than needing every subsequent step to
+ * land within fractions of a pixel of it. */
+const HUG_CANDIDATE_MIN_OPENNESS = 0.75;
+
 function applyHugOffset(world: World, points: Point[], hugOffset: number): Point[] {
   if (Math.abs(hugOffset) < 0.01 || points.length <= 2) return points;
   const hugged: Point[] = [points[0]];
@@ -351,9 +387,16 @@ function applyHugOffset(world: World, points: Point[], hugOffset: number): Point
     const perpX = -dirY / len;
     const perpY = dirX / len;
     const candidate = { x: points[i].x + perpX * hugOffset, y: points[i].y + perpY * hugOffset };
-    const cx = Math.floor(candidate.x / world.cellSize);
-    const cy = Math.floor(candidate.y / world.cellSize);
-    hugged.push(isOpenCell(world, cx, cy) ? candidate : points[i]);
+    // Checked against `bilinearOpenAmount` directly with real margin
+    // (`HUG_CANDIDATE_MIN_OPENNESS`), not just `isVisuallyOpen`'s bare pass/
+    // fail: hugging is exactly what pushes a waypoint close to a wall on
+    // purpose (SPEC: "hug tunnel floors and walls slightly"), which is
+    // exactly where a per-cell check can pass while the actual pixel there
+    // still blends toward the solid neighbor it's hugging (see world.ts's
+    // isVisuallyOpen doc comment) — and where accepting anything that merely
+    // clears the bare minimum leaves no room for the ant's real walk to
+    // differ even slightly from this exact point.
+    hugged.push(bilinearOpenAmount(world, candidate.x, candidate.y) >= HUG_CANDIDATE_MIN_OPENNESS ? candidate : points[i]);
   }
   hugged.push(points[points.length - 1]);
 
@@ -366,8 +409,66 @@ function applyHugOffset(world: World, points: Point[], hugOffset: number): Point
 /** Returns the ant's cached path to (targetX, targetY), computing and
  * caching a fresh one if the target has changed. See the note on `Ant.path`
  * for why no other invalidation is needed. */
-function ensurePath(ant: Ant, world: World, targetX: number, targetY: number): Point[] | null {
-  if (ant.path && ant.pathTargetX === targetX && ant.pathTargetY === targetY) return ant.path;
+/** Floor for how often `ensurePath` will retry pathfinding for an ant whose
+ * own position isn't visually open, no matter how many different targets it
+ * tries in between (see `Ant.pathRecoveryCooldownSeconds`). An ant that just
+ * finished a dig job right at the fresh, barely-opened edge of a brush
+ * stroke resolves this within a fraction of a second just by continuing to
+ * move away from it, so it only ever matters for the rare, genuinely
+ * pathological case — no real cost to keeping it slow. */
+const PATH_RECOVERY_COOLDOWN_SECONDS = 1;
+
+/** Returns the ant's cached path to (targetX, targetY), computing and
+ * caching a fresh one if the target has changed. A path itself never goes
+ * stale on its own (digging only opens cells, never closes them) — but the
+ * cache is also dropped if the ant's own current position isn't visually
+ * open anymore (world.ts's `isVisuallyOpen`), since a cached path assumes
+ * it's still being followed from wherever it was computed from. An ant can
+ * end up somewhere that doesn't render as open right now without ever
+ * having taken an invalid step to get there — most commonly, a digger
+ * finishing a job stands exactly at the fresh edge of its own last brush
+ * stroke, which can still look mostly solid until later digging nearby (or
+ * that same brush passing back over it) finishes opening it up. Blindly
+ * continuing toward a waypoint chosen for a *different* starting point in
+ * the meantime can walk it in a long straight line through solid, never-dug
+ * ground the whole way there; recomputing from where it actually is now
+ * instead gets `findPath`/`stringPull`'s own bounded "trust the start"
+ * leniency (`ants/pathing.ts`) to route it out in one short, real hop, the
+ * same as it would for a freshly chosen target.
+ *
+ * That recovery is rate-limited (`pathRecoveryCooldownSeconds`) rather than
+ * tried every tick for as long as the ant remains there: a truly
+ * pathological position (nothing reachable from it *anywhere*, which should
+ * never legitimately happen but is worth surviving rather than assuming
+ * away) has every phase handler's "job unreachable" fallback bounce the ant
+ * back to idle and pick a *new* target practically every tick — and a new
+ * target defeats a same-target-only throttle just as fast as no throttle at
+ * all, turning one stuck ant into a continuous A* search every tick for the
+ * rest of the run. Gating on real elapsed time instead bounds retries to a
+ * fixed rate regardless of how many distinct targets get tried while
+ * waiting. */
+function ensurePath(ant: Ant, world: World, targetX: number, targetY: number, dt: number): Point[] | null {
+  const visuallyOpen = isVisuallyOpen(world, ant.x, ant.y);
+  const cached = ant.path && ant.pathTargetX === targetX && ant.pathTargetY === targetY;
+  if (cached && visuallyOpen) return ant.path;
+
+  if (!visuallyOpen) {
+    ant.pathRecoveryCooldownSeconds = Math.max(0, ant.pathRecoveryCooldownSeconds - dt);
+    // Keep following whatever path it already had — even one aimed at a
+    // now-stale target — rather than returning null here. A phase handler
+    // treats null as "unreachable, give up and pick something else," which
+    // for a wanderer means immediately trying a *different* target the very
+    // same tick (`pickWanderTarget`). If that kept happening every tick
+    // during the cooldown, the ant would never actually call `followPath`
+    // at all — frozen in place for the whole cooldown, silently, which is
+    // worse than the thing this is trying to fix. Finishing out a stale
+    // route (still real, already-validated ground) at least keeps it moving
+    // while the cooldown runs out.
+    if (ant.pathRecoveryCooldownSeconds > 0) return ant.path;
+    ant.pathRecoveryCooldownSeconds = PATH_RECOVERY_COOLDOWN_SECONDS;
+  } else if (cached) {
+    return ant.path;
+  }
 
   const raw = findPath(world, ant.x, ant.y, targetX, targetY);
   if (!raw) return null;
@@ -380,6 +481,16 @@ function ensurePath(ant: Ant, world: World, targetX: number, targetY: number): P
   return path;
 }
 
+/** How long `followPath` will hold an ant in place refusing steps (see its
+ * own comment) before giving up on the current path entirely and forcing a
+ * fresh one, rather than leaving it to keep waiting forever. Comfortably past
+ * the ~1s a full 180-degree turn takes at `maxTurnRate`, so an ant that's
+ * genuinely just turning is never cut off mid-turn — this only fires for a
+ * spot with no safe heading at all (the founding entrance notch, too narrow
+ * and hard-edged to turn around in, is the one place this is expected to
+ * happen in practice). */
+const FOLLOW_PATH_STUCK_SECONDS = 1.5;
+
 /** Advances an ant along its current path one tick's worth. Returns true
  * once the final waypoint is reached. Shared by every travel phase. */
 function followPath(ant: Ant, world: World, path: Point[], dt: number, movementCfg: MovementConfig, speedFactor: number): boolean {
@@ -389,24 +500,76 @@ function followPath(ant: Ant, world: World, path: Point[], dt: number, movementC
   const dx = target.x - ant.x;
   const dy = target.y - ant.y;
   const dist = Math.hypot(dx, dy);
+  const isFinal = ant.pathIndex === path.length - 1;
 
-  if (dist <= movementCfg.waypointRadius) {
+  if (dist <= movementCfg.finalArriveRadius) {
+    // Snap onto the exact waypoint rather than leaving up to
+    // `finalArriveRadius` of residual gap: `hasLineOfSight`/`stringPull`
+    // validated the straight chord from *this exact point* to the next
+    // waypoint, and starting the next leg from a nearby-but-different point
+    // draws a different, never-validated line instead — in the tightest,
+    // single-cell-wide stretches of a winding tunnel, even a couple of world
+    // px of drift was occasionally enough for the substitute line to clip a
+    // wall the real one never went near. This snap is what actually
+    // guarantees that, which is what lets `finalArriveRadius` itself stay
+    // generous (absorbing crowd jitter) without reopening that risk.
+    ant.x = target.x;
+    ant.y = target.y;
     ant.pathIndex++;
+    ant.blockedSeconds = 0;
     return ant.pathIndex >= path.length;
   }
 
   const desiredHeading = Math.atan2(dy, dx);
   ant.heading = turnToward(ant.heading, desiredHeading, movementCfg.maxTurnRate, dt);
-  const isFinal = ant.pathIndex === path.length - 1;
   const speedScale = isFinal ? arriveSpeedFactor(dist, movementCfg.arriveRadius) : 1;
   const speed = ant.baseSpeed * speedFactor * speedScale;
-  // A path only ever visits open cells, so this shouldn't normally be able
-  // to leave the world — but nothing here guarantees a single tick's step
-  // can't overshoot past a waypoint right at the edge (the shallow entrance
-  // notch reaches all the way to y=0), so clamp as a hard backstop, the same
-  // way digging does.
-  ant.x = Math.min(world.gridW * world.cellSize, Math.max(0, ant.x + Math.cos(ant.heading) * speed * dt));
-  ant.y = Math.min(world.gridH * world.cellSize, Math.max(0, ant.y + Math.sin(ant.heading) * speed * dt));
+  const nx = Math.min(world.gridW * world.cellSize, Math.max(0, ant.x + Math.cos(ant.heading) * speed * dt));
+  const ny = Math.min(world.gridH * world.cellSize, Math.max(0, ant.y + Math.sin(ant.heading) * speed * dt));
+
+  // `hasLineOfSight`/`stringPull` only ever validated the straight chord
+  // between waypoints, not the ant's actual turning physics: `heading` chases
+  // `desiredHeading` at a capped rate (turnToward above), so right after a
+  // sharp retarget — e.g. a wanderer suddenly reassigned to fetch brood clear
+  // across the nest — the ant spends its first turning ticks still walking
+  // mostly in its *old* direction while heading catches up. Moving forward
+  // unconditionally during that arc could carry it straight through solid,
+  // never-dug ground the validated chord never passed through (this is how
+  // an ant used to end up permanently stranded in an undug pocket, cycling
+  // phases forever with nowhere reachable to path back out from). Refusing
+  // the step outright — same hard-backstop approach digging already uses for
+  // rock — just holds it in place turning for the rest of this arc instead;
+  // once heading swings onto a clear bearing the very next tick carries it
+  // forward again, so this reads as a brief, natural-looking pause to turn
+  // rather than a stutter.
+  //
+  // Checked against `isVisuallyOpen` — the same bar the tunnel shader's own
+  // soft edge renders against — not just the looser, discrete `isOpenCell`
+  // `findPath` itself trusts: a step can floor into a cell that's comfortably
+  // under the walkable bar on its own while still blending toward solid
+  // neighbors it's pressed up against, which is exactly what a per-cell check
+  // alone can't see. `hasLineOfSight`'s own real margin above this same bar
+  // (pathing.ts's `LINE_OF_SIGHT_MIN_OPENNESS`) is what keeps this from
+  // turning into a near-constant stall: a validated line clears this real-time
+  // bar with real headroom to spare, so ordinary variance between the planned
+  // line and the ant's actual turning walk has room to land safely.
+  if (!isVisuallyOpen(world, nx, ny)) {
+    ant.currentSpeed = 0;
+    ant.blockedSeconds += dt;
+    if (ant.blockedSeconds >= FOLLOW_PATH_STUCK_SECONDS) {
+      // Waited out a full plausible turn with no safe heading ever opening
+      // up — this path isn't walkable from here, not just awkward to enter.
+      // Drop it so the next `ensurePath` call plans a fresh route instead of
+      // leaving the ant holding a turn it can never finish.
+      ant.path = null;
+      ant.blockedSeconds = 0;
+    }
+    return false;
+  }
+
+  ant.blockedSeconds = 0;
+  ant.x = nx;
+  ant.y = ny;
   ant.currentSpeed = speed;
   return false;
 }
@@ -464,7 +627,7 @@ function stepIdle(ant: Ant, world: World, planner: Planner, lifecycle: Lifecycle
 }
 
 function stepMovingToJobSite(ant: Ant, world: World, planner: Planner, dt: number, movementCfg: MovementConfig, plannerCfg: PlannerConfig): DiggerStepResult {
-  const path = ensurePath(ant, world, ant.pathTargetX, ant.pathTargetY);
+  const path = ensurePath(ant, world, ant.pathTargetX, ant.pathTargetY, dt);
   if (!path) {
     // The job site isn't reachable (shouldn't normally happen — every job
     // starts from ground the colony already dug) — drop the job rather
@@ -515,7 +678,14 @@ function startSurfaceTrip(ant: Ant): void {
   ant.phase = 'movingToSurface';
 }
 
-function stepDiggingShaft(ant: Ant, world: World, planner: Planner, dt: number, diggingCfg: DiggingConfig): DiggerStepResult {
+function stepDiggingShaft(
+  ant: Ant,
+  world: World,
+  planner: Planner,
+  dt: number,
+  diggingCfg: DiggingConfig,
+  shaftPointSampleDistance: number,
+): DiggerStepResult {
   const job = ant.currentJob;
   if (!job || job.kind !== 'shaft') {
     ant.phase = 'idle';
@@ -597,7 +767,7 @@ function stepDiggingShaft(ant: Ant, world: World, planner: Planner, dt: number, 
   ant.currentSpeed = speed;
   ant.diggingProgress += result.volumeRemoved;
   ant.shaftRemainingLength -= movedDistance;
-  recordShaftPoint(planner, job.shaftId, ant.x, ant.y);
+  recordShaftPoint(planner, job.shaftId, ant.x, ant.y, shaftPointSampleDistance);
 
   if (ant.diggingProgress >= diggingCfg.carryVolumeThreshold) {
     startSurfaceTrip(ant);
@@ -749,7 +919,7 @@ function stepDiggingConnector(ant: Ant, world: World, dt: number, diggingCfg: Di
 function stepMovingToSurface(ant: Ant, world: World, mound: Mound, dt: number, movementCfg: MovementConfig, diggingCfg: DiggingConfig): DiggerStepResult {
   const entrance = entrancePosition(world);
 
-  const path = ensurePath(ant, world, entrance.x, entrance.y);
+  const path = ensurePath(ant, world, entrance.x, entrance.y, dt);
   if (!path) {
     // No route to the entrance found (shouldn't normally happen — the
     // colony's own invariant is that every open cell reaches it — but if it
@@ -775,7 +945,7 @@ function phaseForJob(job: DigJob): AntPhase {
 }
 
 function stepReturningToResume(ant: Ant, world: World, dt: number, movementCfg: MovementConfig): DiggerStepResult {
-  const path = ensurePath(ant, world, ant.jobResumeX, ant.jobResumeY);
+  const path = ensurePath(ant, world, ant.jobResumeX, ant.jobResumeY, dt);
   if (!path) {
     ant.phase = ant.currentJob ? phaseForJob(ant.currentJob) : 'idle';
     return { dirty: null };
@@ -801,9 +971,18 @@ function pickWanderTarget(ant: Ant, world: World, wanderCfg: WanderConfig): void
     const cy = Math.floor((ant.y + Math.sin(angle) * radius) / world.cellSize);
     if (!isOpenCell(world, cx, cy)) continue;
     if (world.distanceField[cy * world.gridW + cx] === Infinity) continue;
+    const targetX = (cx + 0.5) * world.cellSize;
+    const targetY = (cy + 0.5) * world.cellSize;
+    // A wander target is somewhere an ant actually stops and lingers
+    // (`pausing`), unlike a merely-passed-through waypoint — checked against
+    // `isVisuallyOpen`, not just the discrete `isOpenCell` above, so it never
+    // settles somewhere that reads back as solid the moment it's rendered
+    // (a narrow alcove or dead-end corner can pass the per-cell bar while its
+    // bilinear-blended neighbors still read mostly solid).
+    if (!isVisuallyOpen(world, targetX, targetY)) continue;
 
-    ant.pathTargetX = (cx + 0.5) * world.cellSize;
-    ant.pathTargetY = (cy + 0.5) * world.cellSize;
+    ant.pathTargetX = targetX;
+    ant.pathTargetY = targetY;
     ant.path = null;
     ant.pathIndex = 0;
     ant.phase = 'movingToTarget';
@@ -822,7 +1001,7 @@ function stepWanderer(ant: Ant, world: World, dt: number, movementCfg: MovementC
     return { dirty: null };
   }
 
-  const path = ensurePath(ant, world, ant.pathTargetX, ant.pathTargetY);
+  const path = ensurePath(ant, world, ant.pathTargetX, ant.pathTargetY, dt);
   if (!path) {
     pickWanderTarget(ant, world, wanderCfg);
     return { dirty: null };
@@ -901,7 +1080,7 @@ function stepNurseFetching(ant: Ant, world: World, lifecycle: Lifecycle, dt: num
     ant.pathIndex = 0;
   }
 
-  const path = ensurePath(ant, world, ant.pathTargetX, ant.pathTargetY);
+  const path = ensurePath(ant, world, ant.pathTargetX, ant.pathTargetY, dt);
   if (!path) {
     releaseNurseClaim(ant, lifecycle);
     ant.phase = 'idle';
@@ -936,7 +1115,7 @@ function stepNurseCarrying(ant: Ant, world: World, planner: Planner, lifecycle: 
     return { dirty: null };
   }
 
-  const path = ensurePath(ant, world, nursery.x, nursery.y);
+  const path = ensurePath(ant, world, nursery.x, nursery.y, dt);
   if (!path) {
     releaseNurseClaim(ant, lifecycle);
     ant.phase = 'idle';
@@ -1002,7 +1181,7 @@ export const FORAGER_SURFACE_Y = -3;
 
 function stepForagerToEntrance(ant: Ant, world: World, dt: number, movementCfg: MovementConfig): DiggerStepResult {
   const entrance = entrancePosition(world);
-  const path = ensurePath(ant, world, entrance.x, entrance.y);
+  const path = ensurePath(ant, world, entrance.x, entrance.y, dt);
   if (!path) {
     ant.phase = 'idle';
     return { dirty: null };
@@ -1060,7 +1239,7 @@ function stepForagerToGranary(ant: Ant, world: World, planner: Planner, foraging
     ant.phase = 'idle';
     return { dirty: null };
   }
-  const path = ensurePath(ant, world, granary.x, granary.y);
+  const path = ensurePath(ant, world, granary.x, granary.y, dt);
   if (!path) {
     ant.carryingItem = null;
     ant.phase = 'idle';
@@ -1082,7 +1261,7 @@ function stepForagerToGranary(ant: Ant, world: World, planner: Planner, foraging
  * difference is which flag they report once they arrive. */
 function stepPlugEntrance(ant: Ant, world: World, dt: number, movementCfg: MovementConfig): DiggerStepResult {
   const entrance = entrancePosition(world);
-  const path = ensurePath(ant, world, entrance.x, entrance.y);
+  const path = ensurePath(ant, world, entrance.x, entrance.y, dt);
   if (!path) {
     ant.phase = 'idle';
     return { dirty: null };
@@ -1095,7 +1274,7 @@ function stepPlugEntrance(ant: Ant, world: World, dt: number, movementCfg: Movem
 
 function stepUnplugEntrance(ant: Ant, world: World, dt: number, movementCfg: MovementConfig): DiggerStepResult {
   const entrance = entrancePosition(world);
-  const path = ensurePath(ant, world, entrance.x, entrance.y);
+  const path = ensurePath(ant, world, entrance.x, entrance.y, dt);
   if (!path) {
     ant.phase = 'idle';
     return { dirty: null };
@@ -1147,7 +1326,7 @@ function enterResting(ant: Ant, world: World, planner: Planner, lifecycle: Lifec
 }
 
 function stepResting(ant: Ant, world: World, dt: number, movementCfg: MovementConfig): DiggerStepResult {
-  const path = ensurePath(ant, world, ant.pathTargetX, ant.pathTargetY);
+  const path = ensurePath(ant, world, ant.pathTargetX, ant.pathTargetY, dt);
   if (!path) return { dirty: null };
   followPath(ant, world, path, dt, movementCfg, 1);
   return { dirty: null };
@@ -1180,7 +1359,7 @@ export function stepAnt(ant: Ant, ctx: AntStepContext, dt: number, cfg: AntStepC
     case 'movingToJobSite':
       return stepMovingToJobSite(ant, ctx.world, ctx.planner, dt, cfg.movement, cfg.planner);
     case 'diggingShaft':
-      return stepDiggingShaft(ant, ctx.world, ctx.planner, dt, cfg.digging);
+      return stepDiggingShaft(ant, ctx.world, ctx.planner, dt, cfg.digging, cfg.planner.shaftPointSampleDistance);
     case 'diggingChamber':
       return stepDiggingChamber(ant, ctx.world, ctx.planner, dt, cfg.digging);
     case 'diggingConnector':

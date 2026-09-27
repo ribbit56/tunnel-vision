@@ -5,7 +5,7 @@
 // `ants/digger.ts`) rather than this module keeping its own cache — a path
 // is only ever needed by the one agent following it, so a per-agent cache
 // is simpler than a shared one and just as effective.
-import { WALKABLE_THRESHOLD, cellIndex, inBounds, type World } from '../world';
+import { WALKABLE_THRESHOLD, bilinearOpenAmount, cellIndex, inBounds, type World } from '../world';
 import type { Point } from './steering';
 
 function heuristic(ax: number, ay: number, bx: number, by: number): number {
@@ -187,11 +187,25 @@ export function findPath(world: World, fromX: number, fromY: number, toX: number
   return null;
 }
 
-/** Whether the straight segment from `a` to `b` stays entirely within open
- * cells, sampled every half a cell — used both by string-pulling and by
- * anything that wants to move or nudge an ant in a straight line without
- * risking clipping a wall the endpoints alone wouldn't reveal (a corner cut
- * across a bend, for instance).
+/** How much bilinear openness (`bilinearOpenAmount`) a *planned* line needs
+ * at every sampled point — well past the bare-minimum bar real-time movement
+ * checks against (`isVisuallyOpen`'s own 0.6). A path built from this check
+ * is later walked by a physically turning ant, not traced exactly along the
+ * ideal line it describes: heading only chases a waypoint's bearing at a
+ * capped rate, and per-tick steps land wherever that puts it, not on this
+ * function's own sample points (spaced every half a cell). A line that only
+ * barely clears the bare minimum leaves no slack for that difference — the
+ * real walk can dip back under it even while heading straight at a
+ * waypoint the line itself confirmed was fine. Requiring real headroom here
+ * instead means ordinary variance between the planned line and the actual
+ * walk has room to land safely. */
+const LINE_OF_SIGHT_MIN_OPENNESS = 0.75;
+
+/** Whether the straight segment from `a` to `b` stays comfortably within
+ * open ground the whole way, sampled every half a cell — used both by
+ * string-pulling and by anything that wants to move or nudge an ant in a
+ * straight line without risking clipping a wall the endpoints alone
+ * wouldn't reveal (a corner cut across a bend, for instance).
  *
  * `a` itself is trusted rather than sampled: it's wherever the ant already
  * legitimately is (the same reasoning `findPath` uses for its start cell),
@@ -208,9 +222,7 @@ export function hasLineOfSight(world: World, a: Point, b: Point): boolean {
     const t = s / steps;
     const x = a.x + (b.x - a.x) * t;
     const y = a.y + (b.y - a.y) * t;
-    const cx = Math.floor(x / world.cellSize);
-    const cy = Math.floor(y / world.cellSize);
-    if (!isOpenCell(world, cx, cy)) return false;
+    if (bilinearOpenAmount(world, x, y) < LINE_OF_SIGHT_MIN_OPENNESS) return false;
   }
   return true;
 }

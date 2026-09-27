@@ -167,7 +167,13 @@ export function createAntSprite(isQueen: boolean, sizeScale: number): AntSprite 
     setPose(x: number, y: number, rotation: number, carryingItem: CarriedItem): void {
       container.x = x;
       container.y = y;
-      container.rotation = rotation;
+      // `rotation` is the ant's heading in the usual atan2 sense (0 = facing
+      // +X). The body is drawn nose-first toward -X (see buildAntBody's head
+      // at -length*0.34, abdomen at +length*0.4) for legibility of the
+      // shape's own geometry, not to match that convention, so it needs a
+      // half turn to actually face the way it's walking — without this it
+      // renders exactly backwards, abdomen leading.
+      container.rotation = rotation + Math.PI;
 
       if (carryingItem !== carriedDotKind) {
         carriedDotKind = carryingItem;

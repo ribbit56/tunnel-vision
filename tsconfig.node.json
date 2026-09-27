@@ -18,11 +18,14 @@
     "vite.config.ts",
     "playwright.config.ts",
     "playwright.shots.config.ts",
+    "playwright.perf.config.ts",
     "tests/**/*.ts",
     "e2e/**/*.ts",
     "src/sim/**/*.ts",
     "src/config.ts",
     "src/timer/**/*.ts",
-    "src/environment/**/*.ts"
+    "src/environment/**/*.ts",
+    "src/dev/colonyDebugApi.ts",
+    "src/dev/colonyStats.ts"
   ]
 }

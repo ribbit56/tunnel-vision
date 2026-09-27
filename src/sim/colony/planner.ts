@@ -89,6 +89,10 @@ export interface Planner {
   nextChamberSide: 1 | -1;
   rng: Rng;
   ticksSinceEvaluation: number;
+  /** The deepest y any shaft point has ever reached, maintained incrementally
+   * by `recordShaftPoint` — see `maxDepthReached`'s own comment for why this
+   * needs to be a running value rather than rescanning `shafts` on demand. */
+  deepestPointY: number;
 }
 
 export interface PlannerConfig {
@@ -220,6 +224,7 @@ export function createPlanner(seed: string, startX: number, startY: number, cfg:
     nextChamberSide: rng() < 0.5 ? 1 : -1,
     rng,
     ticksSinceEvaluation: 0,
+    deepestPointY: startY,
   };
 
   // SPEC: "one main shaft descending from the entrance, with gentle lean."
@@ -285,13 +290,17 @@ function pickNextChamberType(planner: Planner, needs: ColonyNeeds, cfg: PlannerC
 /** Depth as a fraction of the deepest point any shaft has reached so far —
  * SPEC's chamber placement is expressed relative to this ("25 to 40% of max
  * depth reached so far" for the royal chamber), not an absolute world depth,
- * so it scales naturally with however deep the nest actually is. */
+ * so it scales naturally with however deep the nest actually is.
+ *
+ * Reads `planner.deepestPointY` (a running value `recordShaftPoint` updates
+ * on every recorded point) instead of rescanning every point of every shaft.
+ * This runs once per *candidate* site `tryPlaceChamber` scores, tens of
+ * candidates per planner evaluation, every `evaluationIntervalTicks` for the
+ * colony's entire multi-hour growth window — a full rescan here made that
+ * whole path scale with the square of total points ever recorded, turning
+ * into a multi-second stall (or worse) well within a single focus session. */
 function maxDepthReached(planner: Planner, startY: number): number {
-  let maxY = startY;
-  for (const shaft of planner.shafts) {
-    for (const point of shaft.points) maxY = Math.max(maxY, point.y);
-  }
-  return Math.max(1, maxY - startY);
+  return Math.max(1, Math.max(planner.deepestPointY, startY) - startY);
 }
 
 function depthBandFits(type: ChamberType, depthFraction: number): boolean {
@@ -572,9 +581,22 @@ export function chamberSweepPoints(chamber: Chamber, spacing: number): { x: numb
 }
 
 /** Records a point along a shaft's centerline as an ant digs it (see
- * `Shaft.points`), sampled roughly every `shaftPointSampleDistance` of
- * travel by the caller. */
-export function recordShaftPoint(planner: Planner, shaftId: number, x: number, y: number): void {
+ * `Shaft.points`), keeping only one roughly every `minSampleDistance` of
+ * travel rather than one per call. The digging step calls this every tick it
+ * makes progress — for a whole session's worth of shaft digging with no
+ * distance gate at all, `points` grew by about one entry per tick per
+ * actively-digging ant, unbounded for as long as focus kept running, and
+ * `tryPlaceChamber`'s own scan over these points (each of which walks all of
+ * them again via `maxDepthReached`) scaled with the *square* of that count.
+ * `planner.deepestPointY` is still updated every call regardless of whether
+ * a point gets appended, since that value needs the ant's true continuous
+ * depth, not just wherever the sparser recorded points happen to land. */
+export function recordShaftPoint(planner: Planner, shaftId: number, x: number, y: number, minSampleDistance: number): void {
+  if (y > planner.deepestPointY) planner.deepestPointY = y;
+
   const shaft = planner.shafts.find((s) => s.id === shaftId);
-  if (shaft) shaft.points.push({ x, y });
+  if (!shaft) return;
+  const last = shaft.points[shaft.points.length - 1];
+  if (last && Math.hypot(x - last.x, y - last.y) < minSampleDistance) return;
+  shaft.points.push({ x, y });
 }

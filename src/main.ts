@@ -11,12 +11,13 @@ import {
   weather as weatherConfig,
   world as worldConfig,
 } from './config';
-import { createSimStats, mountDevPanel } from './dev/devPanel';
+import './dev/colonyDebugApi';
+import { computeColonyStats, createSimStats, mountDevPanel } from './dev/devPanel';
 import { computeHourOfDay, nightFactorForHour } from './environment/dayNight';
 import { computeSurpriseState, surfaceWalkerX, type SurpriseKind, type SurpriseState } from './environment/surprises';
 import { computeWeatherState, type WeatherPhase } from './environment/weather';
 import { createScene } from './render/scene';
-import { advanceFocus, createSimulation, stepSimulation } from './sim/sim';
+import { advanceFocus, createSimulation, stepSimulation, type Simulation } from './sim/sim';
 import { mergeDirty, type DirtyRect } from './sim/world';
 import { startCatchUp, stepCatchUp, type CatchUpRun } from './timer/catchUp';
 import {
@@ -56,6 +57,28 @@ function newColonyUrl(seed: string | null, devMode: boolean): string {
   if (devMode) params.set('dev', '1');
   const query = params.toString();
   return query.length > 0 ? `${window.location.pathname}?${query}` : window.location.pathname;
+}
+
+/** A cheap, deterministic fold of the state that actually varies run to run
+ * (terrain density, every ant's position/heading, focus time) into a short
+ * string — not cryptographic, just needs to change whenever the real state
+ * does. SPEC section 11's `getStateHash()`: lets Playwright confirm two runs
+ * with the same seed and timeline end up identical without shipping the
+ * whole density grid and ant list across the wire to compare directly. */
+function computeStateHash(sim: Simulation): string {
+  const mix = (h: number, n: number): number => Math.imul(h ^ (n | 0), 0x01000193) >>> 0;
+  let terrainHash = 0x811c9dc5;
+  for (let i = 0; i < sim.world.density.length; i++) {
+    terrainHash = mix(terrainHash, Math.round(sim.world.density[i] * 1e6));
+  }
+  let antsHash = 0x811c9dc5;
+  for (const ant of sim.ants) {
+    antsHash = mix(antsHash, Math.round(ant.x * 1000));
+    antsHash = mix(antsHash, Math.round(ant.y * 1000));
+    antsHash = mix(antsHash, Math.round(ant.heading * 1000));
+  }
+  antsHash = mix(antsHash, Math.round(sim.focusMinutes * 1000));
+  return `${terrainHash.toString(16)}-${antsHash.toString(16)}-${sim.ants.length}`;
 }
 
 async function main(): Promise<void> {
@@ -416,25 +439,36 @@ async function main(): Promise<void> {
       advanceFocus(sim, minutes);
       scene.syncFromSim(sim, { minX: 0, minY: 0, maxX: sim.world.gridW - 1, maxY: sim.world.gridH - 1 });
     };
-    mountDevPanel(
-      session.seed,
-      scene,
-      mainLoop,
-      sim,
-      simStats,
-      runAdvanceFocus,
-      toggleFocus,
-      (hours) => {
-        devForcedHour = hours;
+    const forceHour = (hours: number): void => {
+      devForcedHour = hours;
+    };
+    const forceWeather = (phase: WeatherPhase | null): void => {
+      devForcedWeather = phase;
+    };
+    const triggerSurprise = (kind: SurpriseKind): void => {
+      devForcedSurprise = kind;
+      devForcedSurpriseStartMs = Date.now();
+    };
+    mountDevPanel(session.seed, scene, mainLoop, sim, simStats, runAdvanceFocus, toggleFocus, forceHour, forceWeather, triggerSurprise);
+
+    // SPEC section 11: "A debug API on `window.__colony` (dev mode only) for
+    // Playwright" — lets an e2e test drive and inspect the sim directly
+    // (jump focus, force conditions, read back exact numbers) instead of
+    // clicking dev-panel buttons and scraping its text readout. Reuses the
+    // exact same closures the panel's own buttons call, so both paths always
+    // agree.
+    window.__colony = {
+      setSeed: (seed) => {
+        window.location.href = newColonyUrl(seed, true);
       },
-      (weather) => {
-        devForcedWeather = weather;
-      },
-      (kind) => {
-        devForcedSurprise = kind;
-        devForcedSurpriseStartMs = Date.now();
-      },
-    );
+      setTimeScale: (n) => mainLoop.setTimeScale(n),
+      advanceFocus: runAdvanceFocus,
+      setTimeOfDay: forceHour,
+      setWeather: forceWeather,
+      triggerSurprise,
+      getStats: () => computeColonyStats(sim, simStats),
+      getStateHash: () => computeStateHash(sim),
+    };
   }
 }
 

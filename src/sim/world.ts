@@ -108,14 +108,29 @@ export function createWorld(seed: string, gridW: number, gridH: number, cellSize
   }
 
   // A small pre-opened entrance notch so the founding digger has somewhere
-  // to start from (the queen's own founding dig is simulated from M5).
+  // to start from (the queen's own founding dig is simulated from M5). The
+  // core is fully open, but it's ringed with a soft halo rather than left as
+  // a hard-edged rectangle: every tunnel dug afterward gets its open/solid
+  // gradient from digBrush's own falloff, and this is the one piece of
+  // terrain that bypasses digging entirely, so without a matching gradient
+  // it's a knife-edge an ant's very first turn (heading back down into the
+  // shaft after a surface trip) can straddle — bilinear openness dropping
+  // fully solid just one cell outside the core, unlike anywhere else in the
+  // world. That produced ants (including the founding queen) getting stuck
+  // rotating in place forever right at the entrance, never over the 0.6
+  // open-enough bar no matter which way they faced.
   const entranceCol = Math.round(gridW / 2);
   let initialOpenVolume = 0;
-  for (let cy = 0; cy < 3; cy++) {
-    for (let dx = -1; dx <= 1; dx++) {
-      const idx = cy * gridW + (entranceCol + dx);
-      initialOpenVolume += density[idx];
-      density[idx] = 0;
+  for (let cy = 0; cy <= 3; cy++) {
+    for (let dx = -2; dx <= 2; dx++) {
+      const cx = entranceCol + dx;
+      if (cx < 0 || cx >= gridW) continue;
+      const isCore = cy < 3 && dx >= -1 && dx <= 1;
+      const idx = cy * gridW + cx;
+      const before = density[idx];
+      const after = isCore ? 0 : before * 0.1;
+      density[idx] = after;
+      initialOpenVolume += before - after;
     }
   }
 
@@ -260,8 +275,60 @@ export const OPEN_THRESHOLD = 0.5;
  * still rendering as mostly-solid soil, since the shader's own soft edge
  * only finishes opening up at density 0.45 (plus a little further for its
  * noise wobble). Routing ants only through cells comfortably past that keeps
- * them from visibly walking through ground that still looks unopened. */
+ * them from visibly walking through ground that still looks unopened.
+ *
+ * This is still a per-cell check, though, and cells are coarser than the
+ * pixel an ant is actually drawn at — see `bilinearOpenAmount` below for the
+ * sub-cell-accurate version this doesn't cover. */
 export const WALKABLE_THRESHOLD = 0.3;
+
+/** How solid `bilinearOpenAmount` is allowed to read before a position no
+ * longer counts as visually open (see that function). Chosen so that even
+ * the tunnel shader's own noise wobble (`uWobbleAmount`, ±0.035 in
+ * tunnels.frag.ts) can't push a position past this bound and still land in
+ * the shader's own fully-open range (smoothstep reaching ~0.9, comfortably
+ * past its solid-to-open transition) — this is deliberately a good deal
+ * stricter than `WALKABLE_THRESHOLD`'s per-cell 0.3, not a duplicate of it. */
+const VISUALLY_OPEN_THRESHOLD = 0.4;
+
+/**
+ * The tunnel shader (`render/shaders/tunnels.frag.ts`) never draws a hard
+ * edge — its mask texture is bilinearly filtered, one texel per cell, texel
+ * centers at cell centers — so the color at any given screen pixel blends
+ * toward whichever neighboring cells are nearest, not just whichever cell
+ * the pixel's coordinate happens to floor into. A position can sit in a
+ * cell that's comfortably under `WALKABLE_THRESHOLD` and still render with
+ * a visible tint of solid soil if it's close enough to a less-dug neighbor
+ * for that blend to show — hugging a tunnel wall (SPEC: "hug tunnel floors
+ * and walls slightly") is exactly the situation that puts a position there
+ * on purpose. This mirrors that same bilinear sample in plain TypeScript
+ * (CLAUDE.md: sim code can't reach into the shader itself) so anything
+ * placing an ant can check "will this actually render as open" directly,
+ * rather than trusting a per-cell threshold to imply it. Returns 0 (fully
+ * solid) to 1 (fully open), matching the shader's own mask convention
+ * (`1 - density`, linear-filtered) before its smoothstep is applied. */
+export function bilinearOpenAmount(world: World, worldX: number, worldY: number): number {
+  const gx = worldX / world.cellSize - 0.5;
+  const gy = worldY / world.cellSize - 0.5;
+  const x0 = Math.floor(gx);
+  const y0 = Math.floor(gy);
+  const tx = gx - x0;
+  const ty = gy - y0;
+  const sample = (cx: number, cy: number): number => {
+    const clampedX = Math.max(0, Math.min(world.gridW - 1, cx));
+    const clampedY = Math.max(0, Math.min(world.gridH - 1, cy));
+    return 1 - world.density[cellIndex(world, clampedX, clampedY)];
+  };
+  const top = sample(x0, y0) * (1 - tx) + sample(x0 + 1, y0) * tx;
+  const bottom = sample(x0, y0 + 1) * (1 - tx) + sample(x0 + 1, y0 + 1) * tx;
+  return top * (1 - ty) + bottom * ty;
+}
+
+/** Whether `(worldX, worldY)` will actually render as open ground, not just
+ * technically pass a per-cell density check — see `bilinearOpenAmount`. */
+export function isVisuallyOpen(world: World, worldX: number, worldY: number): boolean {
+  return bilinearOpenAmount(world, worldX, worldY) >= 1 - VISUALLY_OPEN_THRESHOLD;
+}
 
 /**
  * SPEC invariant: "every open cell is connected to the entrance." Flood-fills

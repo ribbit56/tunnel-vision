@@ -123,11 +123,21 @@ export const movement = {
    * easing into "arrive" instead of walking at full speed until it snaps to
    * a stop (steering.ts's `arriveSpeedFactor`). */
   arriveRadius: 14,
-  /** How close counts as "reached" for an intermediate path waypoint (not
-   * the final one, which uses `arriveRadius` instead) before advancing to
-   * the next — needs to be a little forgiving so the ant doesn't overshoot
-   * and turn back on itself at a shallow-angle corner. */
-  waypointRadius: 6,
+  /** How close counts as "reached" for any path waypoint — intermediate or
+   * final — before advancing to the next (or stopping, on the last one).
+   * Only the exact waypoint coordinates were checked for being on open
+   * ground (`hasLineOfSight`/`stringPull` in ants/pathing.ts validate the
+   * straight chord *between* consecutive waypoints specifically), so
+   * `followPath` snaps exactly onto the waypoint the moment it's within this
+   * radius rather than starting the next leg from wherever it actually
+   * stopped — that snap, not this radius, is what keeps a never-validated
+   * line from replacing the real one. The radius itself just controls how
+   * much slack an ant gets to call a waypoint "close enough": generous
+   * enough that separation nudging it a few px off its line in a crowded
+   * spot (the single-file entrance during a foraging or rain-plugging rush,
+   * say) doesn't leave it circling just outside the bar forever, needing to
+   * out-wait the crowd before it can ever register as arrived. */
+  finalArriveRadius: 6,
   /** SPEC: "light separation so ants don't overlap." Distance at which two
    * ants start gently pushing apart, and how much of that push is applied
    * per tick (a soft nudge, not an instant shove). */

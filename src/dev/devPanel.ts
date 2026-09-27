@@ -6,32 +6,14 @@ import type { MainLoop } from '../app/mainLoop';
 import type { SurpriseKind } from '../environment/surprises';
 import type { WeatherPhase } from '../environment/weather';
 import type { Scene } from '../render/scene';
-import { targetOpenCells } from '../sim/colony/planner';
-import { planner as plannerConfig } from '../config';
-import { totalVolumeDug } from '../sim/world';
 import type { Simulation } from '../sim/sim';
+import { computeColonyStats, type SimStats } from './colonyStats';
+
+export { createSimStats, computeColonyStats, type SimStats, type ColonyStats } from './colonyStats';
 
 const TIME_SCALES = [1, 10, 60, 300];
 const WEATHER_PHASES: WeatherPhase[] = ['clear', 'clouding', 'rain', 'clearing'];
 const SURPRISE_KINDS: SurpriseKind[] = ['earthworm', 'beetle', 'butterfly', 'snail', 'fallingLeaf', 'extraFireflies'];
-
-/** Sim/render/frame timing, filled in by main.ts around its calls to
- * `stepSimulation` and the scene's own render functions (SPEC section 11:
- * "Stats: FPS, sim ms, render ms..."; SPEC section 10's perf budget is
- * "under 4ms render and under 2ms sim per frame"). A plain mutable object
- * rather than a return value, since the dev panel polls it on its own
- * interval rather than every tick. */
-export interface SimStats {
-  lastStepMs: number;
-  avgStepMs: number;
-  lastRenderMs: number;
-  avgRenderMs: number;
-  fps: number;
-}
-
-export function createSimStats(): SimStats {
-  return { lastStepMs: 0, avgStepMs: 0, lastRenderMs: 0, avgRenderMs: 0, fps: 0 };
-}
 
 export function mountDevPanel(
   seed: string,
@@ -195,21 +177,18 @@ export function mountDevPanel(
   setInterval(() => {
     focusToggle.textContent = sim.focusRunning ? 'pause focus' : 'resume focus';
 
-    const roleCounts = { queen: 0, digger: 0, nurse: 0, forager: 0, idler: 0 };
-    for (const ant of sim.ants) roleCounts[ant.role]++;
-    const openCells = totalVolumeDug(sim.world);
-    const needed = targetOpenCells(sim.focusMinutes, sim.lifecycle.brood.length, plannerConfig);
+    const s = computeColonyStats(sim, simStats);
     stats.textContent = [
-      `focus: ${sim.focusMinutes.toFixed(1)} min (${sim.focusRunning ? 'running' : 'paused'})`,
-      `ants: ${sim.ants.length} — digger ${roleCounts.digger}, nurse ${roleCounts.nurse}, forager ${roleCounts.forager}, idler ${roleCounts.idler}`,
-      `fps: ${simStats.fps.toFixed(0)}`,
-      `sim step: ${simStats.lastStepMs.toFixed(2)} ms (avg ${simStats.avgStepMs.toFixed(2)} ms) — budget 2ms`,
-      `render: ${simStats.lastRenderMs.toFixed(2)} ms (avg ${simStats.avgRenderMs.toFixed(2)} ms) — budget 4ms`,
-      `open cells: ${openCells.toFixed(0)} / target ${needed.toFixed(0)}`,
-      `chambers: ${sim.planner.chambers.length}, shafts: ${sim.planner.shafts.length}, jobs queued: ${sim.planner.jobs.length}`,
-      `brood: ${sim.lifecycle.brood.length}, mound: ${sim.mound.totalDeposited.toFixed(1)} cells, granary: ${sim.foraging.granaryStored}`,
-      `weather: ${sim.weatherPhase} (intensity ${sim.rainIntensity.toFixed(2)}), entrance plugged: ${sim.entrancePlugged}`,
-      `surprise: ${sim.activeSurprise ?? 'none'}`,
+      `focus: ${s.focusMinutes.toFixed(1)} min (${s.focusRunning ? 'running' : 'paused'})`,
+      `ants: ${s.antCount} — digger ${s.roleCounts.digger}, nurse ${s.roleCounts.nurse}, forager ${s.roleCounts.forager}, idler ${s.roleCounts.idler}`,
+      `fps: ${s.fps.toFixed(0)}`,
+      `sim step: ${s.lastStepMs.toFixed(2)} ms (avg ${s.avgStepMs.toFixed(2)} ms) — budget 2ms`,
+      `render: ${s.lastRenderMs.toFixed(2)} ms (avg ${s.avgRenderMs.toFixed(2)} ms) — budget 4ms`,
+      `open cells: ${s.openCells.toFixed(0)} / target ${s.targetOpenCells.toFixed(0)}`,
+      `chambers: ${s.chambers}, shafts: ${s.shafts}, jobs queued: ${s.jobsQueued}`,
+      `brood: ${s.brood}, mound: ${s.moundCells.toFixed(1)} cells, granary: ${s.granaryStored}`,
+      `weather: ${s.weatherPhase} (intensity ${s.rainIntensity.toFixed(2)}), entrance plugged: ${s.entrancePlugged}`,
+      `surprise: ${s.activeSurprise ?? 'none'}`,
     ].join('\n');
   }, 250);
 
