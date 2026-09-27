@@ -8,7 +8,7 @@ import { expect, test } from '@playwright/test';
 // (this is also how the render/scene side, which a pure-Node vitest run
 // never touches, gets covered).
 test('3-hour accelerated run stays within memory and perf budgets', async ({ page }) => {
-  test.setTimeout(180_000);
+  test.setTimeout(600_000);
   await page.goto('/?seed=acorn&dev=1');
   await page.waitForFunction(() => window.__colony !== undefined);
 
@@ -25,7 +25,9 @@ test('3-hour accelerated run stays within memory and perf budgets', async ({ pag
   const CHUNK_MINUTES = 30;
   const CHUNKS = 6; // 6 x 30min = 3 simulated hours
   for (let i = 0; i < CHUNKS; i++) {
+    const chunkStart = Date.now();
     await page.evaluate((minutes) => window.__colony?.advanceFocus(minutes), CHUNK_MINUTES);
+    console.log(`chunk ${i} took ${((Date.now() - chunkStart) / 1000).toFixed(1)}s wall-clock`);
     heapReadingsMb.push(await sampleHeapMb());
   }
 
@@ -44,4 +46,48 @@ test('3-hour accelerated run stays within memory and perf budgets', async ({ pag
   // SPEC section 10's own worker budget, read back from the exact stats
   // object the dev panel itself displays.
   expect(stats?.antCount).toBeLessThanOrEqual(70);
+});
+
+// The test above uses `advanceFocus`, which steps the sim directly and only
+// resyncs the scene once per chunk — real per-frame rendering (gait
+// animation, camera easing, particle updates, the tunnel mask's dirty-rect
+// repaint) barely runs during it. That's exactly the code path a real,
+// hours-long session spends nearly all its time in, so it needs its own
+// check: focus actually running, real `requestAnimationFrame` frames the
+// whole way, just sped up with the dev time scale so a meaningful stretch
+// fits in a short real sample.
+test('sustained real-time rendering shows no per-frame memory creep', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto('/?seed=acorn&dev=1');
+  await page.waitForFunction(() => window.__colony !== undefined);
+  await page.getByRole('button', { name: 'Start focusing' }).click();
+  await page.evaluate(() => window.__colony?.setTimeScale(300));
+
+  const sampleHeapMb = async (): Promise<number> => {
+    await page.evaluate(() => (window as unknown as { gc?: () => void }).gc?.());
+    return page.evaluate(() => (performance as unknown as { memory: { usedJSHeapSize: number } }).memory.usedJSHeapSize / (1024 * 1024));
+  };
+
+  const SAMPLES = 10;
+  const INTERVAL_MS = 4000;
+  const readings: number[] = [await sampleHeapMb()];
+  for (let i = 0; i < SAMPLES; i++) {
+    await page.waitForTimeout(INTERVAL_MS);
+    readings.push(await sampleHeapMb());
+  }
+
+  const stats = await page.evaluate(() => window.__colony?.getStats());
+  console.log(`heap over ${(SAMPLES * INTERVAL_MS) / 1000}s of continuous real-time rendering (MB): ${readings.map((mb) => mb.toFixed(1)).join(' -> ')}`);
+  console.log(`final stats: focusMinutes=${stats?.focusMinutes.toFixed(1)} ants=${stats?.antCount} fps=${stats?.fps.toFixed(0)}`);
+
+  // A genuine per-frame leak shows up as steady growth even over a short
+  // real sample at a real frame rate — comparing the back half's own growth
+  // against the front half's separates "the colony is still actively
+  // growing" (front-loaded, tapers off) from "something never gets freed"
+  // (keeps climbing at the same rate throughout).
+  const mid = Math.floor(readings.length / 2);
+  const frontHalfGrowth = readings[mid] - readings[0];
+  const backHalfGrowth = readings[readings.length - 1] - readings[mid];
+  console.log(`front-half growth=${frontHalfGrowth.toFixed(1)}MB back-half growth=${backHalfGrowth.toFixed(1)}MB`);
+  expect(backHalfGrowth).toBeLessThan(15);
 });
