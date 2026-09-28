@@ -217,6 +217,7 @@ async function main(): Promise<void> {
     onEndSession: () => {
       pauseClock(focusClock, Date.now());
       controlsUI.setRunning(focusClock.running, everStarted, focusClock.mode, focusClock.phase);
+      settingsPanel.close();
       sessionSummary.show(collectStats(Date.now()));
     },
   });

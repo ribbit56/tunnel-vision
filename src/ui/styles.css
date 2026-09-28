@@ -101,6 +101,13 @@ body {
 #controls {
   position: relative;
   display: flex;
+  flex-wrap: wrap;
+  /* M11 phone layout pass: Start/End/mode-toggle in one unbroken row ran
+     past a phone-width viewport with no way to reach "Pomodoro" (`body`'s
+     `overflow: hidden` clips it rather than letting the page scroll to it).
+     Wrapping keeps every control reachable; centering keeps the second row
+     from starting flush left once it breaks. */
+  justify-content: center;
   gap: 12px;
   pointer-events: auto;
 }
@@ -143,6 +150,27 @@ body {
   align-items: center;
   gap: 5px;
   cursor: pointer;
+}
+
+/* M11 phone layout pass: a landscape phone (short height, e.g. 375px) has
+   too little room for the timer, task name, and controls to fit inside the
+   sky's fixed `--sky-fraction` share of the viewport, so the controls row
+   crowded right up against the grass line and the tunnel entrance behind it.
+   Shrinking the timer and tightening the gaps buys back enough vertical
+   room to sit comfortably within the sky again. Landscape phones are wide,
+   not narrow, so this is a height query rather than a width one. */
+@media (max-height: 500px) {
+  #timer-wrap {
+    gap: 4px;
+  }
+
+  #timer {
+    font-size: clamp(32px, 8vw, 64px);
+  }
+
+  #timer-backdrop {
+    height: 120px;
+  }
 }
 
 /* SPEC section 8: "the UI fades out after 4 seconds without mouse or
@@ -255,6 +283,13 @@ body {
 #session-summary {
   position: fixed;
   inset: 0;
+  /* M11 layout pass: without this, DOM order alone decided stacking, and
+     the settings gear/panel (appended after this element) sat visually on
+     top of the summary's own backdrop — reachable and even readable through
+     what's meant to be a blocking modal. Cramped phone widths made the
+     overlap of the two panels' text especially bad, but the underlying
+     click-through wasn't phone-specific. */
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;

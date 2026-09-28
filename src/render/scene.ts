@@ -19,7 +19,7 @@ import { createSoil } from './soil';
 import { createSurface, type Surface } from './surface';
 import { createSurpriseRenderer } from './surprises';
 import { createWeatherRenderer } from './weather';
-import { creatures, devOverlay, globalTreatment, sampleTimeOfDay } from '../theme/palette';
+import { creatureMinExposure, creatures, devOverlay, globalTreatment, sampleTimeOfDay } from '../theme/palette';
 
 export interface Scene {
   resize(width: number, height: number): void;
@@ -95,13 +95,6 @@ export function createScene(app: Application, seed: string, world: World): Scene
   const broodAndFoodLayer = new Graphics();
   worldContainer.addChild(broodAndFoodLayer);
 
-  const antContainer = new Container();
-  worldContainer.addChild(antContainer);
-  // Pool grows lazily to match `sim.ants.length` the first time it's seen —
-  // keeps this module from needing to know the ant count (or which are the
-  // queen/nanitics) up front.
-  const antSprites: AntSprite[] = [];
-
   const surprises = createSurpriseRenderer(seed);
   worldContainer.addChild(surprises.container);
 
@@ -117,6 +110,43 @@ export function createScene(app: Application, seed: string, world: World): Scene
   const tintLayer = new Graphics();
   tintLayer.blendMode = 'multiply';
   worldContainer.addChild(exposureLayer, tintLayer);
+
+  // Ants are added *after* the dimming layers above (instead of sitting
+  // under them like soil/surprises do) so they can be excluded from the
+  // layers' full night-time darkening and given their own floor instead
+  // (M11 contrast audit, `creatureMinExposure`) — see `computeCreatureTint`.
+  const antContainer = new Container();
+  worldContainer.addChild(antContainer);
+  // Pool grows lazily to match `sim.ants.length` the first time it's seen —
+  // keeps this module from needing to know the ant count (or which are the
+  // queen/nanitics) up front.
+  const antSprites: AntSprite[] = [];
+  // Applied to every ant's container as a Pixi `tint` (kept up to date by
+  // `setTimeOfDay`, and stamped onto each new sprite as it's created below).
+  let currentCreatureTint = 0xffffff;
+
+  /**
+   * Ants used to sit under `exposureLayer`/`tintLayer` like everything else,
+   * darkening down to night's full 0.55 exposure — which dropped the ant
+   * outline's contrast against the (also-darkened) tunnel interior to about
+   * 2.1:1, well under the ~4.8:1 the color was chosen for. Since both layers
+   * are pure multiplies with no additive term, their combined effect on any
+   * backdrop color reduces to one multiplier per channel; this reproduces
+   * that multiplier with `exposure` floored at `creatureMinExposure`, and
+   * applies it directly to ants as a `tint` instead.
+   */
+  function computeCreatureTint(exposure: number, lightTint: number): number {
+    const antExposure = Math.max(exposure, creatureMinExposure);
+    const tintAlpha = globalTreatment.timeOfDayTintAlpha;
+    const channel = (shift: number) => {
+      const backdrop = 255; // tint multiplies the graphic's own color, so start from full-strength (255) per channel
+      const tintChannel = (lightTint >> shift) & 0xff;
+      const afterExposure = backdrop * antExposure;
+      const afterTint = afterExposure * (1 - tintAlpha) + ((afterExposure * tintChannel) / 255) * tintAlpha;
+      return Math.round(afterTint);
+    };
+    return (channel(16) << 16) | (channel(8) << 8) | channel(0);
+  }
 
   const densityOverlay = new Sprite(soil.mask.texture);
   densityOverlay.width = WORLD_WIDTH;
@@ -151,6 +181,12 @@ export function createScene(app: Application, seed: string, world: World): Scene
     worldContainer.scale.set(camera.scale);
     worldContainer.x = viewportWidth / 2 - camera.centerX * camera.scale;
     worldContainer.y = viewportHeight * layout.skyFraction - camera.centerYOffset * camera.scale;
+    // SPEC section 10: reduced motion's camera "snaps between framings with
+    // a slow cross-fade instead of zooming" — `camera.fadeAlpha` dips to 0
+    // and back around the instant the transform above actually jumps, so
+    // that jump itself is never visible. Always 1 (a no-op) when motion
+    // isn't reduced, since the spring eases continuously instead.
+    worldContainer.alpha = camera.fadeAlpha;
   }
 
   // SPEC: "the user can drag to pan and scroll to zoom." Pixi's canvas is a
@@ -205,6 +241,9 @@ export function createScene(app: Application, seed: string, world: World): Scene
     const dimWidth = WORLD_WIDTH + worldConfig.backgroundMargin * 2;
     exposureLayer.clear().rect(dimLeft, 0, dimWidth, worldDepth).fill({ color: 0x000000, alpha: 1 - exposure });
     tintLayer.clear().rect(dimLeft, 0, dimWidth, worldDepth).fill({ color: lightTint, alpha: globalTreatment.timeOfDayTintAlpha });
+
+    currentCreatureTint = computeCreatureTint(exposure, lightTint);
+    for (const sprite of antSprites) sprite.container.tint = currentCreatureTint;
   }
 
   resize(app.screen.width, app.screen.height);
@@ -265,6 +304,7 @@ export function createScene(app: Application, seed: string, world: World): Scene
       while (antSprites.length < sim.ants.length) {
         const ant = sim.ants[antSprites.length];
         const sprite = createAntSprite(ant.role === 'queen', ant.sizeScale);
+        sprite.container.tint = currentCreatureTint;
         antSprites.push(sprite);
         antContainer.addChild(sprite.container);
       }

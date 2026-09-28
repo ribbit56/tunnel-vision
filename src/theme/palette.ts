@@ -160,6 +160,17 @@ export const soilDepthDimming = {
   maxDarkenAtDepth: 0.25,
 };
 
+/** M11 contrast audit: ants normally darken below the grass line by the same
+ * `exposure` as soil/tunnels (see `render/scene.ts`'s `exposureLayer`), but
+ * at night (exposure 0.55) that dragged `workerOutline`'s contrast against
+ * the tunnel interior down to about 2.1:1 - nowhere near the ~4.8:1 the
+ * daytime case was tuned for. Ants get a floor on how dark that
+ * environmental darkening can make them, so the outline stays legible at
+ * every hour, while soil/tunnels/everything else keeps the full night-time
+ * darkening for mood (0.85 keeps night ants noticeably dimmer than day, just
+ * not dim enough to erase the outline). */
+export const creatureMinExposure = 0.85;
+
 /** Global overlay treatment applied across the whole scene (SPEC section 7). */
 export const globalTreatment = {
   paperGrainOpacity: 0.05,
