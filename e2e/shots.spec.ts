@@ -49,6 +49,11 @@ for (const seed of M2_SEEDS) {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto(`/?seed=${seed}&dev=1`);
     await page.waitForSelector('#app canvas');
+    // Growth (including digging) only advances while focus is running
+    // (CLAUDE.md "Two clocks") — without this, the time-scale buttons alone
+    // just fast-forward a paused, resting colony, and the screenshot below
+    // silently captures the same un-dug starting state every time.
+    await page.getByRole('button', { name: 'Start focusing' }).click();
     await page.getByRole('button', { name: '300x' }).click();
     await page.waitForTimeout(60000);
     await page.screenshot({ path: `screenshots/m2-digger-${seed}.png` });
@@ -66,6 +71,9 @@ for (const seed of M2_SEEDS) {
     await page.setViewportSize({ width: 1280, height: 800 });
     await page.goto(`/?seed=${seed}&dev=1`);
     await page.waitForSelector('#app canvas');
+    // See the M2 gallery's comment above — same "focus must be running for
+    // anything to grow" requirement applies here.
+    await page.getByRole('button', { name: 'Start focusing' }).click();
     await page.getByRole('button', { name: '60x' }).click();
     await page.waitForTimeout(20000);
     await page.screenshot({ path: `screenshots/m3-ants-${seed}.png` });
@@ -84,6 +92,10 @@ test('m3 motion sequence acorn', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/?seed=acorn&dev=1');
   await page.waitForSelector('#app canvas');
+  // Growth only advances while focus is running (CLAUDE.md "Two clocks") —
+  // without this the time-scale buttons below just fast-forward a paused,
+  // resting colony instead of actually digging anything.
+  await page.getByRole('button', { name: 'Start focusing' }).click();
   // A little 60x head start so there's an actual tunnel network with a few
   // wanderers spread through it, rather than everyone still bunched at the
   // bare entrance notch.
